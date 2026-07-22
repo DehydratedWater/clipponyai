@@ -2,7 +2,7 @@ import asyncio
 import json
 
 from clipponyai.cli import main
-from clipponyai.config import Config, config_path, data_dir
+from clipponyai.config import Config, config_path
 from clipponyai.telegram_channel import TelegramChannel
 from clipponyai.markdown import md_to_html
 
