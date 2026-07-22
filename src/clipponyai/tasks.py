@@ -11,9 +11,9 @@ hard-won rules kept intact:
 - nudges escalate on a fixed cadence (gaps after the nth ping), cap at
   max_nudges, then the task is dropped with a "say restore" notice instead of
   nagging forever;
-- "I did it" messages are matched deterministically against pending titles
-  (regex done-verbs + token coverage) so completions are grounded in real
-  rows, not the model's imagination;
+- "I did it" adjudication lives in the brain as a small LLM sensor (language
+  agnostic), but every completion it proposes is grounded here against real
+  rows before anything changes;
 - every status change is recorded in a task_log audit table;
 - listings are rendered verbatim from the database — if the list is long,
   the list IS long.
@@ -36,19 +36,6 @@ _STOPWORDS = {
     "go", "get", "być", "się", "na", "do", "w", "z", "i", "o", "że", "to",
 }
 
-# "I did it" detection — EN + a bit of PL, with negation kill-switch
-_DONE_RE = re.compile(
-    r"\b(done|finished|completed|did (it|that|them)|already .{0,20}(did|done|sent|called|paid|bought)"
-    r"|sent|called|paid|bought|submitted|fixed|wrote|cleaned|zrobione|zrobiłem|zrobiłam"
-    r"|wysłałem|wysłałam|załatwione|skończyłem|skończyłam)\b",
-    re.IGNORECASE,
-)
-_NEGATION_RE = re.compile(
-    r"\b(haven'?t|hasn'?t|didn'?t|not yet|still need|still have|forgot|couldn'?t|won'?t"
-    r"|nie zrobiłem|nie zrobiłam|jeszcze nie)\b",
-    re.IGNORECASE,
-)
-
 # escalating nudge templates, indexed by ping number (last repeats)
 NUDGE_TEMPLATES = (
     '⏰ "{t}" — did it happen? tell me "done", or give me a time and I\'ll come back then.',
@@ -59,9 +46,15 @@ NUDGE_TEMPLATES = (
 DROP_NOTICE = '⚰️ I\'ve stopped reminding you about "{t}". say "restore {t}" if it\'s still alive.'
 
 
-def _tokens(text: str) -> set[str]:
+def content_tokens(text: str) -> set[str]:
+    """Mechanical token grounding (NOT language classification — that's the
+    LLM sensor's job). Used only to check that a proposed match shares real
+    words with a real row, and to collapse near-duplicate titles."""
     words = re.findall(r"[\w']+", text.lower())
     return {w for w in words if w not in _STOPWORDS and len(w) > 1}
+
+
+_tokens = content_tokens  # internal alias
 
 
 def _jaccard(a: set[str], b: set[str]) -> float:
@@ -142,11 +135,6 @@ def compose_nudge(tasks: list[Task], batch_limit: int = 3) -> str:
     if extra > 0:
         lines.append(f"(+{extra} more waiting — ask for your tasks)")
     return "\n".join(lines)
-
-
-def claims_done(message: str) -> bool:
-    """Deterministic gate: does this message report something as finished?"""
-    return bool(_DONE_RE.search(message)) and not _NEGATION_RE.search(message)
 
 
 class TaskStore:
@@ -393,25 +381,6 @@ class TaskStore:
                     (now_s, task.id),
                 )
             self._conn.commit()
-
-    # ── deterministic "he said it's done" matching ───────────────────
-    def match_done_claims(self, message: str) -> tuple[list[Task], list[Task]]:
-        """If the message claims something is done, complete the pending tasks
-        it clearly refers to. Returns (completed, ambiguous_candidates)."""
-        if not claims_done(message):
-            return [], []
-        msg_tokens = _tokens(message)
-        completed, ambiguous = [], []
-        for task in self.pending():
-            title_tokens = _tokens(task.title)
-            if not title_tokens:
-                continue
-            coverage = len(msg_tokens & title_tokens) / len(title_tokens)
-            if coverage >= 0.6 and len(msg_tokens & title_tokens) >= min(2, len(title_tokens)):
-                completed.append(self.complete(task, actor="done-claim"))
-            elif coverage >= 0.34:
-                ambiguous.append(task)
-        return completed, ambiguous
 
     # ── verbatim overview (no LLM allowed near this) ─────────────────
     def overview(self, now: datetime | None = None) -> str:

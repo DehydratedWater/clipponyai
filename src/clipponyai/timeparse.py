@@ -1,10 +1,9 @@
-"""Tiny deterministic natural-language time parser.
+"""Offline fallback time parser (English only, deterministic).
 
-The LLM passes times through as the user said them ("in 2h", "tomorrow at
-10", "friday 17:30"); this module grounds them into real datetimes in code —
-per the design rule that mechanical grounding (dates, ids) is regex work, not
-model work. Returns None when nothing parses, so callers can ask instead of
-guessing.
+The PRIMARY time parser is a small fast LLM call (`PonyBrain.parse_when`) —
+language-agnostic and far more flexible. This module exists so reminders keep
+working when the provider is unreachable, and as a stable base for tests.
+Returns None when nothing parses, so callers can ask instead of guessing.
 """
 
 from __future__ import annotations
