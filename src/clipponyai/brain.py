@@ -204,6 +204,7 @@ def _tool_definitions() -> list[ToolDefinition]:
             description=ts.description,
             usage_explanation_short=ts.name.replace("_", " "),
             usage_explanation_long=ts.description,
+            rules=[],
         ))
         for ts in TOOL_SPECS
     ]

@@ -1,0 +1,68 @@
+import pytest
+
+from clipponyai.config import Config, config_path
+from clipponyai.providers import FAST, SLOW, VISION, make_preset, model_for
+
+
+def test_defaults_are_private_and_sane(config):
+    assert config.screenshot_enabled is False  # privacy off by default
+    assert config.telegram.enabled is False
+    assert config.telegram.allowed_user_ids == []  # answers nobody
+    assert config.ui.character == "twilight"
+    assert "openai" in config.llm.providers
+    assert "ollama" in config.llm.providers  # local-GPU path out of the box
+
+
+def test_save_load_roundtrip(config):
+    config.ui.character = "rainbow-dash"
+    config.llm.active = "ollama"
+    config.screenshot_enabled = True
+    path = config.save()
+    assert path == config_path()
+    loaded = Config.load()
+    assert loaded.ui.character == "rainbow-dash"
+    assert loaded.llm.active == "ollama"
+    assert loaded.screenshot_enabled is True
+
+
+def test_load_missing_file_gives_defaults(config):
+    assert Config.load().ui.character == "twilight"
+
+
+def test_active_provider_unknown_raises(config):
+    config.llm.active = "nonexistent"
+    with pytest.raises(KeyError):
+        config.llm.active_provider()
+
+
+def test_model_fallbacks(config):
+    groq = config.llm.providers["groq"]
+    assert groq.slow_model is None
+    assert model_for(groq, SLOW) == groq.fast_model
+    assert model_for(groq, VISION) == groq.fast_model
+    openai = config.llm.providers["openai"]
+    assert model_for(openai, SLOW) == "gpt-4o"
+
+
+def test_make_preset_carries_provider_options(config):
+    ollama = config.llm.providers["ollama"]
+    preset = make_preset("ollama", ollama, FAST)
+    assert preset.provider_options["base_url"] == "http://localhost:11434/v1"
+    assert "api_key_env" not in preset.provider_options  # local: no key needed
+    assert preset.model_id == "qwen3:8b"
+
+    openai_preset = make_preset("openai", config.llm.providers["openai"], VISION)
+    assert openai_preset.provider_options["api_key_env"] == "OPENAI_API_KEY"
+    assert openai_preset.input_modalities == ("text", "image")
+
+
+def test_extra_body_serialized_as_json_string(config):
+    from clipponyai.config import ProviderConfig
+
+    cfg = ProviderConfig(
+        base_url="http://x/v1", fast_model="m",
+        extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+    )
+    preset = make_preset("vllm", cfg, FAST)
+    assert isinstance(preset.provider_options["extra_body"], str)
+    assert "enable_thinking" in preset.provider_options["extra_body"]
