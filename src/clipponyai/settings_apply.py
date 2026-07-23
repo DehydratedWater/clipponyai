@@ -11,8 +11,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .config import Config
+from .config import Config, ProviderConfig
 from .characters import CHARACTERS, FORMS
+
+
+def _default_prov() -> ProviderConfig:
+    return ProviderConfig()
 
 ALL_CHARACTERS = [*CHARACTERS, *FORMS]
 CHARACTER_SLUGS = [c.slug for c in ALL_CHARACTERS]
@@ -76,6 +80,12 @@ class SettingsForm:
 
     # LLM provider
     active_provider: str = "openai"
+    # editable fields for the active provider's config
+    provider_base_url: str = ""
+    provider_api_key_env: str = ""
+    provider_fast_model: str = "gpt-4o-mini"
+    provider_slow_model: str = ""
+    provider_vision_model: str = ""
 
     # autostart
     autostart_enabled: bool = False
@@ -125,6 +135,11 @@ def read_form(config: Config, *, autostart_enabled: bool = False) -> SettingsFor
         logwatch_max_lines=lw.max_lines_per_file,
         logwatch_max_chars=lw.max_total_chars,
         active_provider=config.llm.active,
+        provider_base_url=config.llm.providers.get(config.llm.active, _default_prov()).base_url or "",
+        provider_api_key_env=config.llm.providers.get(config.llm.active, _default_prov()).api_key_env or "",
+        provider_fast_model=config.llm.providers.get(config.llm.active, _default_prov()).fast_model,
+        provider_slow_model=config.llm.providers.get(config.llm.active, _default_prov()).slow_model or "",
+        provider_vision_model=config.llm.providers.get(config.llm.active, _default_prov()).vision_model or "",
         autostart_enabled=autostart_enabled,
         awareness_enabled=aw.enabled,
         awareness_interval_seconds=aw.interval_seconds,
@@ -215,6 +230,8 @@ def validate(form: SettingsForm, *, available_providers: list[str],
     # provider
     if form.active_provider and form.active_provider not in available_providers:
         errors.append(f"Provider {form.active_provider!r} is not configured")
+    if not form.provider_fast_model.strip():
+        errors.append("Fast model must not be blank")
 
     # character
     if form.character and form.character not in ch:
@@ -274,6 +291,14 @@ def apply_to_config(form: SettingsForm, config: Config) -> None:
     lw.max_total_chars = form.logwatch_max_chars
 
     config.llm.active = form.active_provider
+    # edit the active provider's config fields in-place
+    prov = config.llm.providers.get(form.active_provider)
+    if prov is not None:
+        prov.base_url = form.provider_base_url.strip() or None
+        prov.api_key_env = form.provider_api_key_env.strip() or None
+        prov.fast_model = form.provider_fast_model.strip()
+        prov.slow_model = form.provider_slow_model.strip() or None
+        prov.vision_model = form.provider_vision_model.strip() or None
 
     aw = config.awareness
     aw.enabled = form.awareness_enabled
@@ -305,15 +330,5 @@ def needs_restart(changes: dict[str, bool]) -> list[str]:
         reasons.append(
             "LLM provider switch takes full effect after restart "
             "(current conversation keeps the old model until you restart)."
-        )
-    if changes.get("character"):
-        reasons.append(
-            "Character switch takes full effect after restart "
-            "(the pony's sprites and personality reload cleanly)."
-        )
-    if changes.get("pony_scale"):
-        reasons.append(
-            "Pony size change takes effect after restart "
-            "(the window geometry and sprites reload cleanly)."
         )
     return reasons

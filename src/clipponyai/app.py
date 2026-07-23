@@ -155,7 +155,7 @@ async def run_headless(config: Config) -> None:
 
 
 # ── settings dialog helper ───────────────────────────────────────────
-def _open_settings(pony, core: Core, config: Config) -> None:
+def _open_settings(pony, core: Core, config: Config, chat=None) -> None:
     from PySide6.QtWidgets import QDialog
 
     from .install import autostart_status, disable_autostart, enable_autostart
@@ -174,9 +174,18 @@ def _open_settings(pony, core: Core, config: Config) -> None:
     )
 
     def _on_applied() -> None:
-        """Immediately apply live settings after every successful save."""
+        """Apply live settings after every successful save."""
         pony.screenshot_enabled = config.screenshot_enabled
         pony.set_idle_wander(config.ui.idle_wander)
+        if pony.character != config.ui.character:
+            note = core.set_character(config.ui.character)
+            pony.set_character(config.ui.character)
+            if chat is not None:
+                chat.set_pony_name(get_character(config.ui.character).name)
+            pony.say(note, msec=4000)
+        new_scale = config.ui.scale
+        if abs((pony.size_px / 128) - new_scale) > 0.01:
+            pony.set_scale(new_scale)
         try:
             asyncio.get_running_loop().create_task(core.awareness_monitor.refresh())
         except RuntimeError:
@@ -316,7 +325,7 @@ def run_gui(config: Config) -> int:
     pony.provider_selected.connect(on_provider)
     pony.screenshot_toggled.connect(on_peek)
     pony.tasks_requested.connect(lambda: (pony.say(core.overview(), msec=20000)))
-    pony.settings_requested.connect(lambda: _open_settings(pony, core, config))
+    pony.settings_requested.connect(lambda: _open_settings(pony, core, config, chat))
     pony.hide_requested.connect(lambda: toggle_pony())
 
     def toggle_pony() -> None:
@@ -346,7 +355,7 @@ def run_gui(config: Config) -> int:
     act_show.triggered.connect(toggle_pony)
     tray_menu.addAction("💬 chat", toggle_chat)
     tray_menu.addAction("📋 tasks", lambda: pony.say(core.overview(), msec=20000))
-    tray_menu.addAction("⚙ settings", lambda: _open_settings(pony, core, config))
+    tray_menu.addAction("⚙ settings", lambda: _open_settings(pony, core, config, chat))
     tray_menu.addSeparator()
     tray_menu.addAction("✖ quit", quit_app)
     tray.setContextMenu(tray_menu)

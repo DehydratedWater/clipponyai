@@ -474,10 +474,9 @@ class TestDetectChanges:
 
 
 class TestNeedsRestart:
-    def test_restart_for_scale(self):
+    def test_no_restart_for_scale(self):
         reasons = needs_restart({"pony_scale": True})
-        assert len(reasons) >= 1
-        assert any("size" in r.lower() or "scale" in r.lower() for r in reasons)
+        assert reasons == []  # scale applies live via set_scale()
 
     def test_no_restart_for_reminder_change(self):
         reasons = needs_restart({"reminders_enabled": True})
@@ -492,14 +491,13 @@ class TestNeedsRestart:
         assert len(reasons) >= 1
         assert any("provider" in r.lower() for r in reasons)
 
-    def test_restart_for_character(self):
+    def test_no_restart_for_character(self):
         reasons = needs_restart({"character": True})
-        assert len(reasons) >= 1
-        assert any("character" in r.lower() for r in reasons)
+        assert reasons == []  # character applies live via set_character()
 
-    def test_restart_for_both(self):
+    def test_restart_for_provider_only(self):
         reasons = needs_restart({"active_provider": True, "character": True})
-        assert len(reasons) >= 2
+        assert len(reasons) == 1  # only provider needs restart
 
     def test_no_restart_for_autostart(self):
         reasons = needs_restart({"autostart_enabled": True})

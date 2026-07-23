@@ -446,19 +446,53 @@ def _build_llm_tab(form: SettingsForm, available_providers: list[str]) -> QWidge
         prov_combo.addItem(name, name)
     prov_combo.setCurrentText(form.active_provider)
 
-    err_prov = ErrorLabel()
+    base_url_line = QLineEdit(form.provider_base_url)
+    base_url_line.setPlaceholderText("https://api.example.com/v1  (blank = OpenAI default)")
+
+    key_env_line = QLineEdit(form.provider_api_key_env)
+    key_env_line.setPlaceholderText("MY_API_KEY  (env var name; blank = no key needed)")
+
+    fast_line = QLineEdit(form.provider_fast_model)
+    fast_line.setPlaceholderText("gpt-4o-mini  (chat turns + small sensors)")
+
+    slow_line = QLineEdit(form.provider_slow_model)
+    slow_line.setPlaceholderText("leave blank to reuse fast model (deep_think lane)")
+
+    vision_line = QLineEdit(form.provider_vision_model)
+    vision_line.setPlaceholderText("leave blank to reuse slow model (screenshots)")
+
+    err_models = ErrorLabel()
+
+    hint = QLabel(
+        "Editing a provider here updates its config in-place.\n"
+        "Export the matching key env var separately (e.g. export MY_API_KEY=...).\n"
+        "Provider/model changes take effect after restart for the active conversation."
+    )
+    hint.setWordWrap(True)
+    hint.setStyleSheet("color: #8d86a8; font-size: 11px;")
 
     fl.addRow("Active provider:", prov_combo)
-    fl.addRow("", err_prov)
+    fl.addRow("Base URL:", base_url_line)
+    fl.addRow("API key env var:", key_env_line)
+    fl.addRow("Fast model:", fast_line)
+    fl.addRow("Slow model:", slow_line)
+    fl.addRow("Vision model:", vision_line)
+    fl.addRow("", err_models)
+    fl.addRow("", hint)
     box.setLayout(fl)
     lay.addWidget(box)
     lay.addStretch()
 
     def apply() -> None:
         form.active_provider = prov_combo.currentData()
+        form.provider_base_url = base_url_line.text().strip()
+        form.provider_api_key_env = key_env_line.text().strip()
+        form.provider_fast_model = fast_line.text().strip()
+        form.provider_slow_model = slow_line.text().strip()
+        form.provider_vision_model = vision_line.text().strip()
 
     def set_errors(errors: dict[str, str]) -> None:
-        err_prov.set_error(errors.get("active_provider"))
+        err_models.set_error(errors.get("provider_models"))
 
     page._apply = apply  # type: ignore[attr-defined]
     page._set_errors = set_errors  # type: ignore[attr-defined]

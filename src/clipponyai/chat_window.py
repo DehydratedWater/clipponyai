@@ -41,6 +41,14 @@ class ChatWindow(QWidget):
 
         self.log = QTextBrowser()
         self.log.setOpenExternalLinks(True)
+        # The markdown renderer wraps paragraphs in <p> tags; Qt gives those default
+        # block margins (~12px) that create a large gap after the header line.
+        # Zero them out so bubbles stay compact.
+        self.log.document().setDefaultStyleSheet(
+            "p { margin: 0px; padding: 0px; }"
+            "pre { margin: 4px 0px; }"
+            "ul, ol { margin: 2px 0px; padding-left: 20px; }"
+        )
         self.typing_label = QLabel("")
         self.typing_label.setObjectName("typing")
         self.input = QLineEdit()

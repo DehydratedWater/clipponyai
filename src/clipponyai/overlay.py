@@ -164,6 +164,13 @@ class PonyWindow(QWidget):
         """Toggle idle wandering at runtime (applies immediately)."""
         self._idle_wander = on
 
+    def set_scale(self, scale: float) -> None:
+        """Resize the pony at runtime (rebuilds geometry + sprites)."""
+        self.size_px = int(SPRITE * scale)
+        self.setFixedSize(int(self.size_px * 1.35), self.size_px)
+        self.label.setGeometry(0, 0, self.width(), self.height())
+        self._apply_visual()
+
     # ── geometry helpers ─────────────────────────────────────────────
     def _area(self):
         screen = QApplication.screenAt(self.pos()) or QApplication.primaryScreen()
