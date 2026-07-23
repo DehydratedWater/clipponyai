@@ -445,12 +445,33 @@ def run_gui(config: Config) -> int:
         pony.say("👀 I can peek at your screen now (ask me!)" if on
                  else "🙈 screen peeking off", msec=4000)
 
+    # ── dashboard (lazy singleton) ──────────────────────────────────
+    _dashboard = None
+
+    def _get_dashboard():
+        nonlocal _dashboard
+        if _dashboard is None:
+            from .dashboard import DashboardWindow
+            _dashboard = DashboardWindow(core)
+        return _dashboard
+
+    def _show_dashboard():
+        d = _get_dashboard()
+        d.show()
+        d.raise_()
+        d.activateWindow()
+
+    def _show_dashboard_tasks():
+        d = _get_dashboard()
+        d.show_tasks_tab()
+
     pony.clicked.connect(toggle_chat)
     pony.character_selected.connect(on_character)
     pony.provider_selected.connect(on_provider)
     pony.screenshot_toggled.connect(on_peek)
-    pony.tasks_requested.connect(lambda: (pony.say(core.overview(), msec=20000)))
+    pony.tasks_requested.connect(lambda: _show_dashboard_tasks())
     pony.settings_requested.connect(lambda: _open_settings(pony, core, config, chat))
+    pony.dashboard_requested.connect(lambda: _show_dashboard())
     pony.hide_requested.connect(lambda: toggle_pony())
 
     def toggle_pony() -> None:
@@ -479,7 +500,8 @@ def run_gui(config: Config) -> int:
     act_show = tray_menu.addAction("🦄 show / hide pony")
     act_show.triggered.connect(toggle_pony)
     tray_menu.addAction("💬 chat", toggle_chat)
-    tray_menu.addAction("📋 tasks", lambda: pony.say(core.overview(), msec=20000))
+    tray_menu.addAction("📊 planner & activity", _show_dashboard)
+    tray_menu.addAction("📋 tasks", _show_dashboard_tasks)
     tray_menu.addAction("⚙ settings", lambda: _open_settings(pony, core, config, chat))
     tray_menu.addSeparator()
     tray_menu.addAction("✖ quit", quit_app)

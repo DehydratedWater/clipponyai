@@ -10,7 +10,7 @@ the personality (the brain rebuilds the persona prompt).
 from __future__ import annotations
 
 import random
-from typing import Callable
+from collections.abc import Callable
 
 from PySide6.QtCore import QPoint, Qt, QTimer, Signal
 from PySide6.QtGui import QCursor, QMovie, QPixmap
@@ -50,6 +50,7 @@ class PonyWindow(QWidget):
     provider_selected = Signal(str)
     screenshot_toggled = Signal(bool)
     tasks_requested = Signal()
+    dashboard_requested = Signal()
     settings_requested = Signal()
     hide_requested = Signal()
     quit_requested = Signal()
@@ -301,19 +302,19 @@ class PonyWindow(QWidget):
     def say(self, text: str, msec: int | None = None) -> None:
         self.bubble.show_message(text, self.anchor_point(), msec)
 
-    def moveEvent(self, e) -> None:  # noqa: N802 — bubble follows the pony
+    def moveEvent(self, e) -> None:
         super().moveEvent(e)
         if self.bubble.isVisible():
             self.bubble.reanchor(self.anchor_point())
 
     # ── input ────────────────────────────────────────────────────────
-    def mousePressEvent(self, e) -> None:  # noqa: N802
+    def mousePressEvent(self, e) -> None:
         if e.button() == Qt.LeftButton:
             self._press_pos = e.globalPosition().toPoint()
             self._drag_offset = self._press_pos - self.pos()
             self._attention_at_press = self.attention_active()
 
-    def mouseMoveEvent(self, e) -> None:  # noqa: N802
+    def mouseMoveEvent(self, e) -> None:
         if self._drag_offset is not None:
             self._target = None
             if (e.globalPosition().toPoint() - self._press_pos).manhattanLength() > 6:
@@ -327,7 +328,7 @@ class PonyWindow(QWidget):
                     self.set_state("drag")
             self.move(e.globalPosition().toPoint() - self._drag_offset)
 
-    def mouseReleaseEvent(self, e) -> None:  # noqa: N802
+    def mouseReleaseEvent(self, e) -> None:
         if e.button() == Qt.LeftButton and self._press_pos is not None:
             moved = (e.globalPosition().toPoint() - self._press_pos).manhattanLength()
             self._press_pos = None
@@ -344,7 +345,7 @@ class PonyWindow(QWidget):
                 self.say(random.choice(DRAG_REACTIONS), msec=2600)
             self._attention_at_press = False
 
-    def contextMenuEvent(self, e) -> None:  # noqa: N802
+    def contextMenuEvent(self, e) -> None:
         menu = QMenu(self)
         char_menu = menu.addMenu("🐴 character…")
         for c in [*CHARACTERS, *FORMS]:
@@ -366,6 +367,7 @@ class PonyWindow(QWidget):
         peek.toggled.connect(self.screenshot_toggled.emit)
         menu.addSeparator()
         menu.addAction("💬 chat", self.clicked.emit)
+        menu.addAction("📊 planner & activity", self.dashboard_requested.emit)
         menu.addAction("📋 tasks", self.tasks_requested.emit)
         menu.addAction("⚙ settings", self.settings_requested.emit)
         menu.addAction("🙈 hide", self.hide_requested.emit)
