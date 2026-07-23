@@ -285,3 +285,91 @@ def test_doctor_no_network_with_local_provider(capsys, monkeypatch, tmp_path):
     # If we get here without raising, no network was made
     out = capsys.readouterr().out
     assert "clipponyai" in out  # version line always prints
+
+
+# ── doctor: proactive awareness status ─────────────────────────────────
+
+
+def test_doctor_awareness_off_default(capsys, monkeypatch, tmp_path):
+    """Doctor reports awareness off when both gates are disabled."""
+    Config().save()
+    _run_doctor(monkeypatch, tmp_path)
+    out = capsys.readouterr().out
+    assert "awareness: off" in out
+
+
+def test_doctor_awareness_enabled_screenshot_off(capsys, monkeypatch, tmp_path):
+    """Doctor reports awareness enabled but screenshot gate off."""
+    config = Config()
+    config.awareness.enabled = True
+    config.screenshot_enabled = False
+    config.save()
+    _run_doctor(monkeypatch, tmp_path)
+    out = capsys.readouterr().out
+    assert "awareness: enabled but screenshot gate is off" in out
+
+
+def test_doctor_awareness_on_with_settings(capsys, monkeypatch, tmp_path):
+    """Doctor reports awareness on with interval, cooldown, confidence."""
+    config = Config()
+    config.awareness.enabled = True
+    config.awareness.interval_seconds = 180
+    config.awareness.cooldown_minutes = 45
+    config.awareness.minimum_confidence = 0.85
+    config.screenshot_enabled = True
+    config.save()
+    _run_doctor(monkeypatch, tmp_path)
+    out = capsys.readouterr().out
+    assert "awareness: on" in out
+    assert "interval=180s" in out
+    assert "cooldown=45m" in out
+    assert "confidence=0.85" in out
+
+
+def test_doctor_awareness_text_only_vision_warning(capsys, monkeypatch, tmp_path):
+    """Doctor warns when awareness is on but vision model is text-only."""
+    config = Config()
+    config.llm.active = "qwen27b-vllm"
+    config.awareness.enabled = True
+    config.screenshot_enabled = True
+    config.save()
+    _run_doctor(monkeypatch, tmp_path)
+    out = capsys.readouterr().out
+    assert "awareness: on" in out
+    assert "WARNING" in out
+    assert "text-only" in out.lower()
+
+
+def test_doctor_awareness_no_text_only_warning_with_vision_model(capsys, monkeypatch, tmp_path):
+    """Doctor does not warn when a dedicated vision model is set."""
+    config = Config()
+    config.llm.active = "ollama"
+    config.awareness.enabled = True
+    config.screenshot_enabled = True
+    config.save()
+    _run_doctor(monkeypatch, tmp_path)
+    out = capsys.readouterr().out
+    assert "awareness: on" in out
+    # ollama has a dedicated vision_model (qwen2.5vl:7b), so no warning
+    assert "WARNING" not in out
+
+
+def test_doctor_awareness_non_mutating(capsys, monkeypatch, tmp_path):
+    """Doctor does not modify awareness config."""
+    config = Config()
+    config.awareness.enabled = True
+    config.awareness.interval_seconds = 200
+    config.awareness.cooldown_minutes = 60
+    config.awareness.minimum_confidence = 0.9
+    config.screenshot_enabled = True
+    config.save()
+
+    before = config
+    _run_doctor(monkeypatch, tmp_path)
+
+    after = Config.load()
+    assert after.awareness.enabled == before.awareness.enabled
+    assert after.awareness.interval_seconds == before.awareness.interval_seconds
+    assert after.awareness.cooldown_minutes == before.awareness.cooldown_minutes
+    assert after.awareness.minimum_confidence == before.awareness.minimum_confidence
+    assert after.screenshot_enabled == before.screenshot_enabled

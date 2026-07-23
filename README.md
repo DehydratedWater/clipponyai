@@ -33,6 +33,12 @@ clipponyai                    # 🦄 (sprites download on first run)
 - **Sees your screen — only if you let her.** Screen peeking is **off by
   default**; enable it in the right-click menu and she can answer "what am I
   looking at?" with a vision model.
+- **Proactive focus awareness — opt-in, double-gated.** When both
+  `screenshot_enabled` and `awareness.enabled` are `true`, the pony periodically
+  classifies your screen via the LLM vision lane and can interrupt you for
+  distractions (social media during work hours) or after-hours work. Delivered
+  via cursor-chase nudge. Disabled by default; requires a vision-capable model
+  (text-only local models like `qwen27b-vllm` cannot image-classify).
 - **Talks from your phone.** Enable Telegram, and reminders reach you there
   too. The channel layer is a small base class — other messengers are one
   subclass away.
@@ -146,6 +152,12 @@ ui:
   idle_wander: true         # random walks, reading, little quips
   attention_seconds: 30     # how long a reminder chases your cursor
 screenshot_enabled: false   # privacy: SHE CANNOT SEE YOUR SCREEN unless true
+awareness:
+  enabled: false              # proactive focus/distraction awareness
+  interval_seconds: 120       # how often to check (30–3600s)
+  cooldown_minutes: 30        # silence after alert (5–480m)
+  minimum_confidence: 0.7     # skip low-confidence assessments
+  focus_policy: "During work hours, interrupt if the user is on social media …"
 auto_track_commitments: true  # notice "I'll do X" promises automatically
 reminders:
   quiet_hours_start: 23     # no pings at night
@@ -189,6 +201,53 @@ reminders:
 Set `suppress_off_hours: true` to silence all ordinary reminders outside the
 configured work window (the pony still drops exhausted tasks).
 
+### Proactive focus awareness
+
+Proactive awareness lets the pony periodically classify your screen and
+interrupt you when it detects a distraction (e.g. social media during work
+hours) or after-hours work. It requires **two independent gates**, both must
+be `true`:
+
+1. `screenshot_enabled: true` — the pony must be allowed to capture the screen
+2. `awareness.enabled: true` — the user must explicitly opt in to proactive scanning
+
+```yaml
+screenshot_enabled: true
+awareness:
+  enabled: true
+  interval_seconds: 120       # seconds between checks (30–3600)
+  cooldown_minutes: 30        # silence after each alert (5–480)
+  minimum_confidence: 0.7     # skip assessments below this threshold (0.0–1.0)
+  focus_policy: "During work hours, interrupt on social media. After hours, remind if working."
+```
+
+**How it works.** Every `interval_seconds`, the pony takes a screenshot and
+sends it to the LLM's vision lane along with the current work-hours status,
+pending tasks overview, and the natural-language `focus_policy`. The vision
+model returns a structured decision (`should_interrupt`, `confidence`, `reason`).
+If the decision passes the `minimum_confidence` threshold and says to interrupt,
+the pony delivers a cursor-chase nudge. A cooldown timer (persisted in SQLite)
+prevents repeat alerts within `cooldown_minutes`.
+
+**Text-only local model limitation.** The awareness feature requires a
+vision-capable model. When the active provider's resolved vision model is a
+text-only local model (e.g. `qwen27b-vllm` which resolves to
+cyankiwi/Qwen3.5-27B-AWQ-BF16-INT8), screenshots cannot be image-classified.
+The monitor will not start in this configuration. Set a dedicated `vision_model`
+that accepts images (e.g. `qwen2.5vl:7b` on Ollama) or use a hosted provider
+with built-in vision. `clipponyai doctor` warns when the active vision model
+is a known text-only model.
+
+**macOS Screen Recording permission.** On macOS, `screenshot_enabled: true`
+requires the Screen Recording permission grant in
+**System Settings → Privacy & Security → Screen Recording**. After granting,
+relaunch the app. Without this permission, screenshots return blank images and
+awareness cannot function.
+
+`clipponyai doctor` reports awareness state (off/on), whether the screenshot
+gate is also on, interval and cooldown settings, and warns if the active
+vision model is a known text-only model.
+
 ### Privacy-gated log watching
 
 Logwatch lets the pony tail local log files and answer questions about them
@@ -219,6 +278,7 @@ section in a tabbed UI:
 - **Reminders** — enabled, check interval, quiet hours, nudge gaps, max nudges, batch limit
 - **Work Hours** — enable/disable, start/end times, active weekdays, closing nudge, off-hours suppression
 - **Log Watch** — enable/disable, file paths, line/char limits
+- **Awareness** — enable/disable, interval, cooldown, confidence threshold, focus policy
 - **LLM** — switch active provider
 - **Misc** — autostart on login
 
@@ -237,7 +297,7 @@ id in `allowed_user_ids` (ask [@userinfobot](https://t.me/userinfobot)), set
 clipponyai              run the pony (default)
 clipponyai --headless   run without GUI (telegram + reminders only)
 clipponyai init         write the default config
-clipponyai doctor       check config / keys / sprites / extras
+clipponyai doctor       check config / keys / sprites / extras / awareness
 clipponyai tasks        print the task overview in your terminal
 clipponyai fetch-sprites   (re)download sprites
 clipponyai check-llm    smoke-test the active LLM provider (returns 0/1)
@@ -256,6 +316,7 @@ Reports a full health check including:
 - Autostart status (enabled/disabled with path)
 - Platform-specific screen permission guidance (macOS Screen Recording + Accessibility)
 - Vision model limitation warnings for text-only local models
+- Proactive awareness state (off/on, screenshot gate, interval, cooldown)
 - First-run next steps when sprites or config are missing
 
 ### `clipponyai autostart`
@@ -292,7 +353,7 @@ macOS requires explicit user grants for two capabilities:
 - **Screen Recording** — needed when `screenshot_enabled: true`. Grant in
   **System Settings → Privacy & Security → Screen Recording**. After granting,
   you may need to restart the app (macOS requires relaunch after permission
-  changes).
+  changes). Required for both manual screen peeking and proactive awareness.
 - **Accessibility** — needed for cursor-chasing (the pony follows your
   pointer). Grant in **System Settings → Privacy & Security → Accessibility**.
 

@@ -155,6 +155,23 @@ def _cmd_doctor(_args) -> int:
             if not provider.vision_model:
                 print(f"  vision model: {vision_model} (text-only local model — screenshots will be text-prompted, not image-understood)")
 
+    # Proactive focus awareness status
+    aw = config.awareness
+    awareness_active = aw.enabled and config.screenshot_enabled
+    if awareness_active:
+        print(f"  awareness: on (interval={aw.interval_seconds}s, cooldown={aw.cooldown_minutes}m, confidence={aw.minimum_confidence})")
+        # Warn if the active vision model is a known text-only model
+        if known:
+            _vision = provider.resolved_vision_model()
+            _fast = provider.fast_model
+            if _vision == _fast and provider.base_url and not provider.api_key_env:
+                print("  awareness: WARNING — active vision model is text-only (" + _vision + ")")
+                print("  awareness:   screen classification will not work; set a vision-capable model")
+    elif aw.enabled:
+        print("  awareness: enabled but screenshot gate is off (screenshot_enabled=False)")
+    else:
+        print("  awareness: off (opt-in via awareness.enabled + screenshot_enabled)")
+
     # First-run next steps
     if not have_sprites() or not config_path().exists():
         print("\nfirst-run next steps:")
