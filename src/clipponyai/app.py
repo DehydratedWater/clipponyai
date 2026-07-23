@@ -33,7 +33,10 @@ class Core:
         self.brain = PonyBrain(
             config, self.store, screenshot_fn=screenshot_fn, client_factory=client_factory
         )
-        self.scheduler = ReminderScheduler(self.store, config.reminders, self._deliver_nudge)
+        self.scheduler = ReminderScheduler(
+            self.store, config.reminders, self._deliver_nudge,
+            work_hours=config.reminders.work_hours,
+        )
         self.channels: list[Channel] = []
         self.observers: list[Observer] = []      # GUI mirrors exchanges live
         self.nudge_hooks: list[Deliver] = []     # GUI shows nudges (bubble + chase)

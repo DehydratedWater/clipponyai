@@ -15,7 +15,7 @@ from pathlib import Path
 
 import yaml
 from platformdirs import user_config_dir, user_data_dir
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 APP_NAME = "clipponyai"
 
@@ -121,6 +121,44 @@ class LLMConfig(BaseModel):
         return self.providers[self.active]
 
 
+class WorkHoursConfig(BaseModel):
+    """Focused work-hours boundaries for closing reminders.
+
+    When enabled, at the end of each configured workday the scheduler emits
+    a single "closing nudge" listing real pending tasks — once per workday,
+    persisted via the SQLite meta table so it never fires twice.
+
+    Quiet-hours still take precedence: if closing time falls inside quiet
+    hours the closing nudge is suppressed.
+    """
+
+    enabled: bool = False
+    start: str = "09:00"   # HH:MM workday start
+    end: str = "17:00"     # HH:MM workday end
+    weekdays: list[int] = Field(default=[0, 1, 2, 3, 4])  # Mon=0 .. Sun=6
+    closing_nudge: bool = True           # list pending tasks at end of workday
+    suppress_off_hours: bool = False     # silence ordinary reminders outside work hours
+
+    @field_validator("start", "end")
+    @classmethod
+    def _validate_time(cls, v: str) -> str:
+        parts = v.split(":")
+        if len(parts) != 2:
+            raise ValueError("time must be HH:MM")
+        h, m = int(parts[0]), int(parts[1])
+        if not (0 <= h <= 23 and 0 <= m <= 59):
+            raise ValueError("time must be HH:MM (0-23, 0-59)")
+        return v
+
+    @field_validator("weekdays")
+    @classmethod
+    def _validate_weekdays(cls, v: list[int]) -> list[int]:
+        for d in v:
+            if not (0 <= d <= 6):
+                raise ValueError("weekdays must be 0 (Mon) .. 6 (Sun)")
+        return sorted(set(v))
+
+
 class RemindersConfig(BaseModel):
     enabled: bool = True
     check_interval_seconds: int = 60
@@ -132,6 +170,7 @@ class RemindersConfig(BaseModel):
     nudge_gaps_minutes: list[int] = Field(default=[30, 60, 120, 240, 360])
     max_nudges: int = 8  # then the task is dropped with a notice
     batch_limit: int = 3  # max tasks mentioned in one nudge message
+    work_hours: WorkHoursConfig = Field(default_factory=WorkHoursConfig)
 
 
 class TelegramConfig(BaseModel):

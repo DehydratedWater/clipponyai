@@ -178,6 +178,10 @@ class TaskStore:
                 source TEXT NOT NULL DEFAULT 'desktop',
                 at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS meta (
+                key TEXT PRIMARY KEY NOT NULL,
+                value TEXT NOT NULL
+            );
             """
         )
         self._conn.commit()
@@ -430,3 +434,19 @@ class TaskStore:
                 "SELECT role, content FROM messages ORDER BY id DESC LIMIT ?", (limit,)
             ).fetchall()
         return [{"role": r["role"], "content": r["content"]} for r in reversed(rows)]
+
+    # ── key/value meta store ─────────────────────────────────────────
+    def get_meta(self, key: str, default: str | None = None) -> str | None:
+        """Read a persistent meta value (safe, idempotent)."""
+        with self._lock:
+            row = self._conn.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+        return row["value"] if row else default
+
+    def set_meta(self, key: str, value: str) -> None:
+        """Upsert a persistent meta value (idempotent via REPLACE)."""
+        with self._lock:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
+                (key, value),
+            )
+            self._conn.commit()
