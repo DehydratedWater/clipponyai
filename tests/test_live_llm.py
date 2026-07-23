@@ -22,8 +22,12 @@ from open_agent_compiler.interactive import build_interactive_spec, run_interact
 from open_agent_compiler.interactive.runner import OpenAICompatClient
 from open_agent_compiler.interactive.spec import ToolSpec
 
-from clipponyai.config import ProviderConfig
+from clipponyai.awareness import PonyBrainAssessor
+from clipponyai.brain import PonyBrain
+from clipponyai.cli import _make_synthetic_vision_image
+from clipponyai.config import Config, ProviderConfig
 from clipponyai.providers import FAST, make_live_profile
+from clipponyai.tasks import TaskStore
 
 LIVE_BASE_URL = os.environ.get("CLIPPONYAI_LIVE_BASE_URL")
 LIVE_MODEL = os.environ.get("CLIPPONYAI_LIVE_MODEL", "cyankiwi/Qwen3.5-27B-AWQ-BF16-INT8")
@@ -104,3 +108,29 @@ def test_live_tool_call(_live_spec, _live_client):
     assert not result.error, f"run error: {result.error}"
     text = (result.output_text or "").strip()
     assert text, "empty response from live endpoint after tool call"
+
+
+@pytest.mark.skipif(not LIVE_BASE_URL, reason="set CLIPPONYAI_LIVE_BASE_URL to run live tests")
+def test_live_multimodal_awareness_path(_live_provider_cfg, tmp_path):
+    """The configured VISION lane sees an image through the real awareness path."""
+    config = Config()
+    config.llm.active = "live-vision"
+    config.llm.providers["live-vision"] = _live_provider_cfg.model_copy(
+        update={"vision_model": LIVE_MODEL}
+    )
+    store = TaskStore(tmp_path / "live-vision.sqlite3")
+    try:
+        assessment = PonyBrainAssessor(PonyBrain(config, store)).assess(
+            _make_synthetic_vision_image(),
+            work_hours_status="Currently inside work hours.",
+            task_overview="(none)",
+            focus_policy=(
+                "Interrupt only if the image does not have red on the left and blue on the right."
+            ),
+        )
+    finally:
+        store.close()
+
+    assert assessment.should_interrupt is False
+    assert assessment.confidence >= 0.8
+    assert assessment.reason

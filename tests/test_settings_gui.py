@@ -6,6 +6,7 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtTest import QSignalSpy
 from PySide6.QtWidgets import QApplication
 
 from clipponyai.config import Config
@@ -92,3 +93,16 @@ def test_settings_dialog_logwatch_add_button_rejects_blank():
 
     dialog.close()
     app.processEvents()
+
+
+def test_successful_apply_emits_live_update_signal():
+    app = QApplication.instance() or QApplication([])
+    config = Config()
+    dialog = SettingsDialog(config, available_providers=sorted(config.llm.providers))
+    spy = QSignalSpy(dialog.applied)
+
+    dialog._do_apply()
+    app.processEvents()
+
+    assert spy.count() == 1
+    dialog.close()

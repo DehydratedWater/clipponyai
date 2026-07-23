@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Callable
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -572,7 +572,11 @@ class SettingsDialog(QDialog):
     Reads current ``Config`` into a flat form, validates on Apply, and
     persists back to ``config.yaml``.  Autostart operations only fire when
     the checkbox value actually changed.
+
+    Emits ``applied`` after every successful save (both Apply and Apply & Close).
     """
+
+    applied = Signal()
 
     def __init__(
         self,
@@ -750,3 +754,4 @@ class SettingsDialog(QDialog):
         self._original = read_form(
             self.config, autostart_enabled=self.form.autostart_enabled
         )
+        self.applied.emit()

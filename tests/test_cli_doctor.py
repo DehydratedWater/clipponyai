@@ -207,15 +207,17 @@ def test_doctor_cloud_provider_no_check_llm_hint(capsys, monkeypatch, tmp_path):
 # ── doctor: vision model limitation ────────────────────────────────────
 
 
-def test_doctor_text_only_vision_warning(capsys, monkeypatch, tmp_path):
-    """Doctor warns about text-only vision for local models without dedicated vision model."""
+def test_doctor_vision_multimodal_warning(capsys, monkeypatch, tmp_path):
+    """Doctor reports multimodal for providers with explicit vision_model."""
     config = Config()
     config.llm.active = "qwen27b-vllm"
     config.screenshot_enabled = True
     config.save()
     _run_doctor(monkeypatch, tmp_path)
     out = capsys.readouterr().out
-    assert "text-only" in out.lower()
+    assert "multimodal" in out.lower()
+    # No text-only warning for qwen27b-vllm (it has vision_model set)
+    assert "text-only" not in out.lower()
 
 
 # ── doctor: first-run next steps ───────────────────────────────────────
@@ -326,8 +328,8 @@ def test_doctor_awareness_on_with_settings(capsys, monkeypatch, tmp_path):
     assert "confidence=0.85" in out
 
 
-def test_doctor_awareness_text_only_vision_warning(capsys, monkeypatch, tmp_path):
-    """Doctor warns when awareness is on but vision model is text-only."""
+def test_doctor_awareness_no_text_only_warning_for_qwen(capsys, monkeypatch, tmp_path):
+    """Doctor does NOT warn when qwen27b-vllm is active (it has vision_model set)."""
     config = Config()
     config.llm.active = "qwen27b-vllm"
     config.awareness.enabled = True
@@ -336,11 +338,11 @@ def test_doctor_awareness_text_only_vision_warning(capsys, monkeypatch, tmp_path
     _run_doctor(monkeypatch, tmp_path)
     out = capsys.readouterr().out
     assert "awareness: on" in out
-    assert "WARNING" in out
-    assert "text-only" in out.lower()
+    assert "WARNING" not in out
+    assert "text-only" not in out.lower()
 
 
-def test_doctor_awareness_no_text_only_warning_with_vision_model(capsys, monkeypatch, tmp_path):
+def test_doctor_awareness_no_warning_with_vision_model(capsys, monkeypatch, tmp_path):
     """Doctor does not warn when a dedicated vision model is set."""
     config = Config()
     config.llm.active = "ollama"
@@ -352,6 +354,7 @@ def test_doctor_awareness_no_text_only_warning_with_vision_model(capsys, monkeyp
     assert "awareness: on" in out
     # ollama has a dedicated vision_model (qwen2.5vl:7b), so no warning
     assert "WARNING" not in out
+    assert "text-only" not in out.lower()
 
 
 def test_doctor_awareness_non_mutating(capsys, monkeypatch, tmp_path):

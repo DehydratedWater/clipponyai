@@ -37,8 +37,7 @@ clipponyai                    # 🦄 (sprites download on first run)
   `screenshot_enabled` and `awareness.enabled` are `true`, the pony periodically
   classifies your screen via the LLM vision lane and can interrupt you for
   distractions (social media during work hours) or after-hours work. Delivered
-  via cursor-chase nudge. Disabled by default; requires a vision-capable model
-  (text-only local models like `qwen27b-vllm` cannot image-classify).
+  via cursor-chase nudge. Disabled by default; requires a vision-capable model.
 - **Talks from your phone.** Enable Telegram, and reminders reach you there
   too. The channel layer is a small base class — other messengers are one
   subclass away.
@@ -87,26 +86,27 @@ llm:
 The `qwen27b-vllm` preset targets a vLLM server running
 `cyankiwi/Qwen3.5-27B-AWQ-BF16-INT8` on `http://127.0.0.1:8082/v1`. It needs
 no API key and sets `enable_thinking: false` so the model returns normal text
-instead of reasoning tokens. Point your own vLLM instance there or edit the
-`base_url` in config to match your setup.
+instead of reasoning tokens. This model supports both text and image inputs
+(multimodal), so screenshots and awareness work out of the box.
+Point your own vLLM instance there or edit the `base_url` in config to match your setup.
 
 After starting vLLM, verify connectivity with:
 
 ```
 clipponyai check-llm
+clipponyai check-llm --vision    # verify image understanding
 ```
 
-### Local model vision limitation
+### Local model capabilities
 
-Local text-only models (including `qwen27b-vllm`) do not understand images.
-When `screenshot_enabled` is `true` but the active provider has no dedicated
-`vision_model`, screenshots are sent as text prompts rather than being
-image-analysed. For real vision, either:
+The `qwen27b-vllm` preset (Qwen3.5-27B) supports images natively — screenshots
+and proactive awareness work without a separate vision model. Other local
+models may be text-only; set a dedicated `vision_model` (e.g. `qwen2.5vl:7b`
+on Ollama) or use a hosted provider with built-in vision (OpenAI, Anthropic,
+OpenRouter) for image understanding.
 
-- Set a `vision_model` that accepts images (e.g. `qwen2.5vl:7b` on Ollama)
-- Use a hosted provider with built-in vision (OpenAI, Anthropic, OpenRouter)
-
-`clipponyai doctor` reports this limitation when detected.
+`clipponyai doctor` reports vision capability. Run `clipponyai check-llm --vision`
+to verify image understanding end-to-end.
 
 ### `clipponyai check-llm`
 
@@ -119,6 +119,13 @@ clipponyai check-llm
 Sends a minimal chat turn and prints `ok — <provider> (<model>) replied: …`
 on success (exit 0) or `ERROR: …` on failure (exit 1). Useful in CI,
 docker-entrypoint scripts, or just to confirm your local server is running.
+
+With `--vision`, sends a synthetic two-color image and verifies the model can
+read it. Returns 0 only when the model correctly identifies both colors.
+
+```
+clipponyai check-llm --vision
+```
 
 ## How the assistant part works (design notes)
 
@@ -229,24 +236,15 @@ If the decision passes the `minimum_confidence` threshold and says to interrupt,
 the pony delivers a cursor-chase nudge. A cooldown timer (persisted in SQLite)
 prevents repeat alerts within `cooldown_minutes`.
 
-**Text-only local model limitation.** The awareness feature requires a
-vision-capable model. When the active provider's resolved vision model is a
-text-only local model (e.g. `qwen27b-vllm` which resolves to
-cyankiwi/Qwen3.5-27B-AWQ-BF16-INT8), screenshots cannot be image-classified.
-The monitor will not start in this configuration. Set a dedicated `vision_model`
-that accepts images (e.g. `qwen2.5vl:7b` on Ollama) or use a hosted provider
-with built-in vision. `clipponyai doctor` warns when the active vision model
-is a known text-only model.
-
 **macOS Screen Recording permission.** On macOS, `screenshot_enabled: true`
 requires the Screen Recording permission grant in
 **System Settings → Privacy & Security → Screen Recording**. After granting,
 relaunch the app. Without this permission, screenshots return blank images and
 awareness cannot function.
 
-`clipponyai doctor` reports awareness state (off/on), whether the screenshot
-gate is also on, interval and cooldown settings, and warns if the active
-vision model is a known text-only model.
+`clipponyai doctor` reports awareness state, privacy gates, interval, cooldown,
+and the resolved vision model. Use `clipponyai check-llm --vision` to verify the
+complete local image path.
 
 ### Privacy-gated log watching
 
@@ -315,7 +313,7 @@ Reports a full health check including:
 - Logwatch privacy status and file path existence
 - Autostart status (enabled/disabled with path)
 - Platform-specific screen permission guidance (macOS Screen Recording + Accessibility)
-- Vision model limitation warnings for text-only local models
+- Vision model capability report (multimodal status)
 - Proactive awareness state (off/on, screenshot gate, interval, cooldown)
 - First-run next steps when sprites or config are missing
 

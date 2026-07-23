@@ -7,7 +7,8 @@ clipponyai fetch-sprites  download Desktop Ponies sprites now
 clipponyai tasks        print the current task overview
 clipponyai doctor       check config, provider keys, sprites, extras,
                         work-hours, logwatch, autostart, permissions
-clipponyai check-llm    smoke-test the active LLM provider (returns 0/1)
+clipponyai check-llm          smoke-test the active LLM provider (returns 0/1)
+clipponyai check-llm --vision  verify vision (image) capability
 clipponyai autostart    enable/disable/check login autostart
 clipponyai install-desktop  install .desktop entry (Linux) / explain (macOS)
 """
@@ -171,15 +172,13 @@ def _cmd_doctor(_args) -> int:
             "  and Accessibility permission for cursor chasing in System Settings → Privacy & Security"
         )
 
-    # Vision model limitation for text-only local models
+    # Vision model capability report
     if known:
         vision_model = provider.resolved_vision_model()
-        # Local providers without a dedicated vision model use the text model for vision
-        if provider.base_url and not provider.api_key_env:
-            if not provider.vision_model:
-                print(
-                    f"  vision model: {vision_model} (text-only local model — screenshots will be text-prompted, not image-understood)"
-                )
+        if provider.vision_model:
+            print(f"  vision model: {vision_model} (multimodal)")
+        else:
+            print(f"  vision model: {vision_model} (inherited from slow/fast model)")
 
     # Proactive focus awareness status
     aw = config.awareness
@@ -188,15 +187,6 @@ def _cmd_doctor(_args) -> int:
         print(
             f"  awareness: on (interval={aw.interval_seconds}s, cooldown={aw.cooldown_minutes}m, confidence={aw.minimum_confidence})"
         )
-        # Warn if the active vision model is a known text-only model
-        if known:
-            _vision = provider.resolved_vision_model()
-            _fast = provider.fast_model
-            if _vision == _fast and provider.base_url and not provider.api_key_env:
-                print("  awareness: WARNING — active vision model is text-only (" + _vision + ")")
-                print(
-                    "  awareness:   screen classification will not work; set a vision-capable model"
-                )
     elif aw.enabled:
         print("  awareness: enabled but screenshot gate is off (screenshot_enabled=False)")
     else:
@@ -244,8 +234,44 @@ def _cmd_install_desktop(_args) -> int:
     return 0
 
 
-def _cmd_check_llm(_args) -> int:
-    """Smoke-test the active LLM provider: send a minimal chat turn, return 0/1."""
+def _make_synthetic_vision_image() -> bytes:
+    """Create a tiny in-memory PNG: left half red, right half blue.
+
+    Uses only the stdlib — no Pillow, no disk I/O.
+    Returns raw PNG bytes (64x32 pixels).
+    """
+    import struct
+    import zlib
+
+    width, height = 64, 32
+    raw = b""
+    for y in range(height):
+        raw += b"\x00"  # filter byte (none)
+        for x in range(width):
+            if x < width // 2:
+                raw += b"\xff\x00\x00"  # red
+            else:
+                raw += b"\x00\x00\xff"  # blue
+
+    def _chunk(chunk_type: bytes, data: bytes) -> bytes:
+        c = chunk_type + data
+        return struct.pack(">I", len(data)) + c + struct.pack(">I", zlib.crc32(c) & 0xFFFFFFFF)
+
+    png = b"\x89PNG\r\n\x1a\n"
+    png += _chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+    png += _chunk(b"IDAT", zlib.compress(raw))
+    png += _chunk(b"IEND", b"")
+    return png
+
+
+def _cmd_check_llm(args) -> int:
+    """Smoke-test the active LLM provider: send a minimal chat turn, return 0/1.
+
+    With ``--vision``, sends a synthetic two-color image and verifies the model
+    can read it (structured JSON output, deterministic comparison).
+    """
+    vision_mode = hasattr(args, "vision") and args.vision
+
     from open_agent_compiler import AgentDefinition, AgentHeader
     from open_agent_compiler.interactive import build_interactive_spec, run_interactive
     from open_agent_compiler.interactive.runner import OpenAICompatClient
@@ -273,6 +299,10 @@ def _cmd_check_llm(_args) -> int:
         usage_explanation_long="smoke test",
         system_prompt="You are a helpful assistant. Answer briefly.",
     )
+
+    if vision_mode:
+        return _check_llm_vision(active, provider_cfg, agent)
+
     spec = build_interactive_spec(
         agent=agent,
         live_profile=make_live_profile(active, provider_cfg, FAST),
@@ -297,6 +327,73 @@ def _cmd_check_llm(_args) -> int:
     except Exception as e:
         print(f"ERROR: {e}")
         return 1
+
+
+def _check_llm_vision(active, provider_cfg, agent) -> int:
+    """Send a synthetic image through the same structured VISION lane as awareness."""
+    import base64
+
+    from open_agent_compiler.interactive import build_interactive_spec, run_interactive
+    from open_agent_compiler.interactive.runner import OpenAICompatClient
+
+    from .providers import VISION, make_live_profile
+
+    vision_model = provider_cfg.resolved_vision_model()
+    encoded = base64.b64encode(_make_synthetic_vision_image()).decode()
+    schema = {
+        "type": "object",
+        "properties": {
+            "left_color": {"type": "string"},
+            "right_color": {"type": "string"},
+        },
+        "required": ["left_color", "right_color"],
+    }
+    spec = build_interactive_spec(
+        agent=agent,
+        live_profile=make_live_profile(active, provider_cfg, VISION),
+    ).model_copy(update={"output_schema": schema})
+    client = OpenAICompatClient.from_spec(spec)
+    message = [{
+        "role": "user",
+        "content": [
+            {
+                "type": "text",
+                "text": (
+                    "Identify the dominant color of each vertical half. Return only "
+                    "the requested left_color and right_color JSON fields."
+                ),
+            },
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:image/png;base64,{encoded}"},
+            },
+        ],
+    }]
+
+    try:
+        result = run_interactive(spec, message, client=client, max_tool_rounds=0)
+    except Exception as exc:
+        print(f"ERROR: vision check failed: {exc}")
+        return 1
+    if result.error:
+        print(f"ERROR: vision check failed: {result.error}")
+        return 1
+    if not isinstance(result.structured, dict):
+        print("FAIL — vision model did not return the requested structured result")
+        return 1
+
+    left = str(result.structured.get("left_color", "")).casefold().strip()
+    right = str(result.structured.get("right_color", "")).casefold().strip()
+    left_words = left.replace("-", " ").split()
+    right_words = right.replace("-", " ").split()
+    if "red" in left_words and "blue" in right_words:
+        print(f"ok — {active} ({vision_model}) vision confirmed (left={left}, right={right})")
+        return 0
+    print(
+        f"FAIL — {active} ({vision_model}) did not read the image correctly "
+        f"(left={left!r}, right={right!r})"
+    )
+    return 1
 
 
 def _cmd_run(args) -> int:
@@ -342,7 +439,8 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("fetch-sprites", help="download Desktop Ponies sprites")
     sub.add_parser("tasks", help="print the task overview")
     sub.add_parser("doctor", help="check your setup")
-    sub.add_parser("check-llm", help="smoke-test the active LLM provider")
+    check_parser = sub.add_parser("check-llm", help="smoke-test the active LLM provider")
+    check_parser.add_argument("--vision", action="store_true", help="test vision (image) capability")
 
     # autostart subcommand
     auto_parser = sub.add_parser("autostart", help="enable/disable/check autostart")

@@ -172,13 +172,21 @@ def _open_settings(pony, core: Core, config: Config) -> None:
         disable_autostart_fn=disable_autostart,
         parent=pony,
     )
+
+    def _on_applied() -> None:
+        """Immediately apply live settings after every successful save."""
+        pony.screenshot_enabled = config.screenshot_enabled
+        pony.set_idle_wander(config.ui.idle_wander)
+        try:
+            asyncio.get_running_loop().create_task(core.awareness_monitor.refresh())
+        except RuntimeError:
+            pass
+
+    dialog.applied.connect(_on_applied)
+
     result = dialog.exec()
     if result == QDialog.Accepted:
         pony.say("settings saved!", msec=4000)
-        # apply live-safe changes
-        pony.screenshot_enabled = config.screenshot_enabled
-        pony.set_idle_wander(config.ui.idle_wander)
-        asyncio.get_running_loop().create_task(core.awareness_monitor.refresh())
 
 
 # ── Qt shell ──────────────────────────────────────────────────────────

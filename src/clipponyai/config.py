@@ -101,6 +101,7 @@ def default_providers() -> dict[str, ProviderConfig]:
         "qwen27b-vllm": ProviderConfig(
             base_url="http://127.0.0.1:8082/v1",
             fast_model="cyankiwi/Qwen3.5-27B-AWQ-BF16-INT8",
+            vision_model="cyankiwi/Qwen3.5-27B-AWQ-BF16-INT8",
             extra_body={"chat_template_kwargs": {"enable_thinking": False}},
         ),
     }

@@ -133,6 +133,7 @@ def test_qwen27b_vllm_in_default_providers():
     prov = config.llm.providers["qwen27b-vllm"]
     assert prov.base_url == "http://127.0.0.1:8082/v1"
     assert prov.fast_model == "cyankiwi/Qwen3.5-27B-AWQ-BF16-INT8"
+    assert prov.vision_model == "cyankiwi/Qwen3.5-27B-AWQ-BF16-INT8"
     assert prov.api_key_env is None
     assert prov.extra_body is not None
     assert prov.extra_body["chat_template_kwargs"]["enable_thinking"] is False
@@ -145,3 +146,147 @@ def test_qwen27b_vllm_no_api_key_needed():
     config = Config()
     prov = config.llm.providers["qwen27b-vllm"]
     assert missing_api_key(prov) is None
+
+
+# ── check-llm --vision ────────────────────────────────────────────────
+
+def test_check_llm_vision_flag_registered_in_help(capsys):
+    """The --vision flag appears in check-llm help."""
+    try:
+        main(["check-llm", "--help"])
+    except SystemExit:
+        pass
+    out = capsys.readouterr().out
+    assert "vision" in out.lower()
+
+
+def test_check_llm_vision_success_with_mocked_client(capsys, monkeypatch):
+    """When --vision is passed and the client returns correct JSON, exit 0."""
+    config = Config()
+    config.llm.active = "qwen27b-vllm"
+    config.save()
+
+    from open_agent_compiler.interactive.runner import ChatResponse
+
+    class FakeVisionClient:
+        def complete(self, *, messages, tools=None, model, **params):
+            return ChatResponse(
+                content='{"left_color": "red", "right_color": "blue"}',
+                tool_calls=[],
+            )
+
+    def fake_from_spec(spec):
+        return FakeVisionClient()
+
+    with patch(
+        "open_agent_compiler.interactive.runner.OpenAICompatClient.from_spec",
+        fake_from_spec,
+    ):
+        code = main(["check-llm", "--vision"])
+
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "ok" in out.lower()
+    assert "vision confirmed" in out.lower()
+
+
+def test_check_llm_vision_fail_wrong_colors(capsys, monkeypatch):
+    """When --vision is passed and model returns wrong colors, exit 1."""
+    config = Config()
+    config.llm.active = "qwen27b-vllm"
+    config.save()
+
+    from open_agent_compiler.interactive.runner import ChatResponse
+
+    class FakeVisionClient:
+        def complete(self, *, messages, tools=None, model, **params):
+            return ChatResponse(
+                content='{"left_color": "green", "right_color": "yellow"}',
+                tool_calls=[],
+            )
+
+    def fake_from_spec(spec):
+        return FakeVisionClient()
+
+    with patch(
+        "open_agent_compiler.interactive.runner.OpenAICompatClient.from_spec",
+        fake_from_spec,
+    ):
+        code = main(["check-llm", "--vision"])
+
+    assert code == 1
+    out = capsys.readouterr().out
+    assert "fail" in out.lower()
+
+
+def test_check_llm_vision_fail_non_json(capsys, monkeypatch):
+    """When --vision is passed and model returns non-JSON, exit 1."""
+    config = Config()
+    config.llm.active = "qwen27b-vllm"
+    config.save()
+
+    from open_agent_compiler.interactive.runner import ChatResponse
+
+    class FakeVisionClient:
+        def complete(self, *, messages, tools=None, model, **params):
+            return ChatResponse(content="I see an image", tool_calls=[])
+
+    def fake_from_spec(spec):
+        return FakeVisionClient()
+
+    with patch(
+        "open_agent_compiler.interactive.runner.OpenAICompatClient.from_spec",
+        fake_from_spec,
+    ):
+        code = main(["check-llm", "--vision"])
+
+    assert code == 1
+    out = capsys.readouterr().out
+    assert "fail" in out.lower() or "error" in out.lower()
+
+
+def test_check_llm_vision_connection_error(capsys, monkeypatch):
+    """When --vision is passed and the client raises, exit 1."""
+    config = Config()
+    config.llm.active = "qwen27b-vllm"
+    config.save()
+
+    class FakeVisionClient:
+        def complete(self, *, messages, tools=None, model, **params):
+            raise ConnectionError("refused")
+
+    def fake_from_spec(spec):
+        return FakeVisionClient()
+
+    with patch(
+        "open_agent_compiler.interactive.runner.OpenAICompatClient.from_spec",
+        fake_from_spec,
+    ):
+        code = main(["check-llm", "--vision"])
+
+    assert code == 1
+    out = capsys.readouterr().out
+    assert "error" in out.lower()
+
+
+def test_check_llm_vision_synthetic_image_is_valid_png():
+    """The synthetic vision image is a valid PNG with correct dimensions."""
+    from clipponyai.cli import _make_synthetic_vision_image
+
+    png = _make_synthetic_vision_image()
+    # PNG magic bytes
+    assert png[:4] == b"\x89PNG"
+    # Non-empty
+    assert len(png) > 100
+
+
+def test_check_llm_vision_missing_provider(capsys, monkeypatch):
+    """--vision with missing provider returns 1."""
+    config = Config()
+    config.llm.active = "nonexistent"
+    config.save()
+
+    code = main(["check-llm", "--vision"])
+    assert code == 1
+    out = capsys.readouterr().out
+    assert "error" in out.lower()
