@@ -6,6 +6,7 @@
     clipponyai fetch-sprites  download Desktop Ponies sprites now
     clipponyai tasks        print the current task overview
     clipponyai doctor       check config, provider keys, sprites, extras
+    clipponyai check-llm    smoke-test the active LLM provider (returns 0/1)
 """
 
 from __future__ import annotations
@@ -104,6 +105,58 @@ def _cmd_doctor(_args) -> int:
     return 0 if ok else 1
 
 
+def _cmd_check_llm(_args) -> int:
+    """Smoke-test the active LLM provider: send a minimal chat turn, return 0/1."""
+    from open_agent_compiler import AgentDefinition, AgentHeader
+    from open_agent_compiler.interactive import build_interactive_spec, run_interactive
+    from open_agent_compiler.interactive.runner import OpenAICompatClient
+
+    config = Config.load()
+    active = config.llm.active
+    if active not in config.llm.providers:
+        print(f"ERROR: provider {active!r} not configured")
+        return 1
+    provider_cfg = config.llm.providers[active]
+    missing = missing_api_key(provider_cfg)
+    if missing is not None:
+        print(f"ERROR: environment variable {missing} is not set")
+        return 1
+
+    from .providers import FAST, make_live_profile
+
+    agent = AgentDefinition(
+        header=AgentHeader(
+            agent_id="check-llm",
+            name="check-llm",
+            description="smoke test",
+        ),
+        usage_explanation_short="smoke",
+        usage_explanation_long="smoke test",
+        system_prompt="You are a helpful assistant. Answer briefly.",
+    )
+    spec = build_interactive_spec(
+        agent=agent,
+        live_profile=make_live_profile(active, provider_cfg, FAST),
+    )
+    client = OpenAICompatClient.from_spec(spec)
+    try:
+        result = run_interactive(
+            spec, "Say ok in one word.", client=client, max_tool_rounds=0,
+        )
+        if result.error:
+            print(f"ERROR: {result.error}")
+            return 1
+        text = (result.output_text or "").strip()
+        if not text:
+            print("ERROR: empty response")
+            return 1
+        print(f"ok — {active} ({provider_cfg.fast_model}) replied: {text[:120]}")
+        return 0
+    except Exception as e:
+        print(f"ERROR: {e}")
+        return 1
+
+
 def _cmd_run(args) -> int:
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
@@ -145,11 +198,13 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("fetch-sprites", help="download Desktop Ponies sprites")
     sub.add_parser("tasks", help="print the task overview")
     sub.add_parser("doctor", help="check your setup")
+    sub.add_parser("check-llm", help="smoke-test the active LLM provider")
 
     args = parser.parse_args(argv)
     commands = {
         None: _cmd_run, "run": _cmd_run, "init": _cmd_init,
-        "fetch-sprites": _cmd_fetch_sprites, "tasks": _cmd_tasks, "doctor": _cmd_doctor,
+        "fetch-sprites": _cmd_fetch_sprites, "tasks": _cmd_tasks,
+        "doctor": _cmd_doctor, "check-llm": _cmd_check_llm,
     }
     return commands[args.command](args)
 

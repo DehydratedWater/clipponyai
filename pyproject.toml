@@ -48,6 +48,9 @@ packages = ["src/clipponyai"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+markers = [
+    'live: tests that hit a real LLM endpoint (deselect with -m "not live")',
+]
 
 [tool.ruff]
 line-length = 100
