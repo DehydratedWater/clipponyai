@@ -476,6 +476,44 @@ TOOL_SPECS: list[ToolSpec] = [
             },
         },
     ),
+    # ── Onboarding tools ───────────────────────────────────────
+    ToolSpec(
+        name="onboarding_status",
+        description="Check the current onboarding status (new, in_progress, completed, skipped).",
+        input_schema={"type": "object", "properties": {}},
+    ),
+    ToolSpec(
+        name="complete_onboarding",
+        description="Mark first-run onboarding as complete. Call this when the user says setup is done or you have collected enough initial information.",
+        input_schema={"type": "object", "properties": {}},
+    ),
+    ToolSpec(
+        name="skip_onboarding",
+        description="Skip first-run onboarding. Call this if the user explicitly says they want to skip setup.",
+        input_schema={"type": "object", "properties": {}},
+    ),
+    ToolSpec(
+        name="restart_onboarding",
+        description="Restart first-run onboarding from the beginning. Use only if the user explicitly asks to redo setup.",
+        input_schema={"type": "object", "properties": {}},
+    ),
+    # ── Proactive question tools ───────────────────────────────
+    ToolSpec(
+        name="silence_proactive_questions",
+        description="Silence proactive context questions for a number of hours. Use when the user says 'don't bother me' or similar.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "hours": {"type": "integer",
+                           "description": "hours to stay quiet (default 24)"},
+            },
+        },
+    ),
+    ToolSpec(
+        name="resume_proactive_questions",
+        description="Resume proactive context questions after they were silenced.",
+        input_schema={"type": "object", "properties": {}},
+    ),
 ]
 
 
@@ -698,8 +736,15 @@ class PonyBrain:
                 f"your own assumptions:\n" + "\n".join(guard_notes) + "]"
             )
         history = self.store.recent_messages(self.config.llm.history_limit)[:-1]
+        # Inject onboarding context note into system prompt when active
+        spec = self._spec(FAST)
+        onboarding_note = self._onboarding_context_note()
+        if onboarding_note:
+            spec = spec.model_copy(update={
+                "system_prompt": spec.system_prompt + "\n\n" + onboarding_note,
+            })
         result = self._run(
-            self._spec(FAST), user_turn,
+            spec, user_turn,
             tool_runner=self._tool_runner, history=history,
         )
         reply = result.output_text.strip() or "…*ears droop* something went wrong in my head."
@@ -1254,6 +1299,67 @@ class PonyBrain:
                 f"({row['count']} calls)"
             )
         return "\n".join(lines)
+
+    # ── onboarding tools ─────────────────────────────────────────────
+
+    def _tool_onboarding_status(self, args: dict) -> str:
+        mgr = self._onboarding_manager()
+        return f"Onboarding status: {mgr.status()}"
+
+    def _tool_complete_onboarding(self, args: dict) -> str:
+        mgr = self._onboarding_manager()
+        mgr.complete()
+        return "Onboarding complete! I'm all set up now."
+
+    def _tool_skip_onboarding(self, args: dict) -> str:
+        mgr = self._onboarding_manager()
+        mgr.skip()
+        return "Onboarding skipped. We can always come back to setup later."
+
+    def _tool_restart_onboarding(self, args: dict) -> str:
+        mgr = self._onboarding_manager()
+        mgr.reset()
+        return "Onboarding reset. You can start fresh now."
+
+    def _tool_silence_proactive_questions(self, args: dict) -> str:
+        q = self._proactive_questioner()
+        if q is None:
+            return "Proactive questions are not configured."
+        hours = int(args.get("hours", 24))
+        q.silence(hours)
+        return f"I'll stay quiet about context questions for {hours} hours."
+
+    def _tool_resume_proactive_questions(self, args: dict) -> str:
+        q = self._proactive_questioner()
+        if q is None:
+            return "Proactive questions are not configured."
+        q.resume()
+        return "Proactive questions resumed. I'll ask again when relevant."
+
+    def _onboarding_manager(self):
+        """Lazy-access onboarding manager."""
+        from .onboarding import OnboardingManager
+        return OnboardingManager(self.store)
+
+    def _onboarding_context_note(self) -> str | None:
+        """Return onboarding grounding note for system prompt, or None."""
+        mgr = self._onboarding_manager()
+        return mgr.context_note()
+
+    def _proactive_questioner(self):
+        """Return the proactive questioner if wired, else None."""
+        return getattr(self, "_proactive_questioner_val", None)
+
+    def _set_proactive_questioner(self, q) -> None:
+        self._proactive_questioner_val = q
+
+    # ── mark onboarding categories collected ─────────────────────────
+
+    def _mark_onboarding_collected(self, *categories: str) -> None:
+        """Call from tool handlers during onboarding to mark categories done."""
+        mgr = self._onboarding_manager()
+        if mgr.is_in_progress():
+            mgr.mark_collected(*categories)
 
     # ── deep think / screen / logs (unchanged) ───────────────────────
 

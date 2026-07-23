@@ -29,6 +29,7 @@ from .tasks import DROP_NOTICE, TaskStore, compose_nudge
 
 if TYPE_CHECKING:
     from .accountability import ActivityStore
+    from .context_questions import ProactiveQuestioner
     from .goals import GoalEngine
     from .routines import RoutineEngine
     from .rules import RuleEngine
@@ -114,6 +115,7 @@ class ReminderScheduler:
         goal_engine: GoalEngine | None = None,
         rule_engine: RuleEngine | None = None,
         activity_store: ActivityStore | None = None,
+        proactive_questioner: "ProactiveQuestioner | None" = None,
     ) -> None:
         self.store = store
         self.config = config
@@ -123,6 +125,7 @@ class ReminderScheduler:
         self.goal_engine = goal_engine
         self.rule_engine = rule_engine
         self.activity_store = activity_store
+        self.proactive_questioner = proactive_questioner
         self._stop = asyncio.Event()
 
     async def tick(self, now: datetime | None = None) -> str | None:
@@ -130,6 +133,9 @@ class ReminderScheduler:
         now = now or datetime.now()
         if not self.config.enabled:
             return None
+
+        if self.proactive_questioner is not None:
+            self.proactive_questioner.clear_tick()
 
         in_quiet = in_quiet_hours(
             now, self.config.quiet_hours_start, self.config.quiet_hours_end,
@@ -195,7 +201,20 @@ class ReminderScheduler:
 
         # Combine all messages
         all_parts = [m for m in [rule_msg, routine_msg, nudge_msg] if m]
-        return "\n".join(all_parts)
+        combined = "\n".join(all_parts) if all_parts else None
+
+        # ── proactive questions: LAST, only if nothing else delivered ──
+        if self.proactive_questioner is not None:
+            if combined:
+                self.proactive_questioner.mark_delivered_this_tick()
+            pq_msg = await self.proactive_questioner.tick(now)
+            if pq_msg:
+                await self.deliver(pq_msg)
+                if combined:
+                    return combined + "\n" + pq_msg
+                return pq_msg
+
+        return combined
 
     def _try_goal_sync(self, now: datetime) -> None:
         """Run GoalEngine sync for today (always, regardless of quiet hours)."""

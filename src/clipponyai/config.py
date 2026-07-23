@@ -263,6 +263,48 @@ class AwarenessConfig(BaseModel):
         return v
 
 
+class OnboardingConfig(BaseModel):
+    """First-run onboarding: collect initial context via chat (no GUI wizard)."""
+
+    enabled: bool = True
+
+
+class ProactiveQuestionsConfig(BaseModel):
+    """Non-annoying proactive context-gap questions from the scheduler.
+
+    Fires only when ALL gates pass (onboarding complete, no pending tasks,
+    no due routines, no active goal with missing check-in, quiet hours clear,
+    silence not active, min gap elapsed, nothing delivered this tick).
+    """
+
+    enabled: bool = True
+    min_gap_hours: int = 4  # hours between batches (3..24)
+    max_questions_per_batch: int = 3  # questions per message (1..5)
+    silence_default_hours: int = 24  # hours after user says "don't bother me"
+    require_empty_agenda: bool = True  # only ask when no pending tasks/routines/goals
+
+    @field_validator("min_gap_hours")
+    @classmethod
+    def _gap_range(cls, v: int) -> int:
+        if not (3 <= v <= 24):
+            raise ValueError("min_gap_hours must be between 3 and 24")
+        return v
+
+    @field_validator("max_questions_per_batch")
+    @classmethod
+    def _batch_range(cls, v: int) -> int:
+        if not (1 <= v <= 5):
+            raise ValueError("max_questions_per_batch must be between 1 and 5")
+        return v
+
+    @field_validator("silence_default_hours")
+    @classmethod
+    def _silence_sensible(cls, v: int) -> int:
+        if v < 1:
+            raise ValueError("silence_default_hours must be at least 1")
+        return v
+
+
 class Config(BaseModel):
     ui: UIConfig = Field(default_factory=UIConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
@@ -270,6 +312,8 @@ class Config(BaseModel):
     telegram: TelegramConfig = Field(default_factory=TelegramConfig)
     logwatch: LogWatchConfig = Field(default_factory=LogWatchConfig)
     awareness: AwarenessConfig = Field(default_factory=AwarenessConfig)
+    onboarding: OnboardingConfig = Field(default_factory=OnboardingConfig)
+    proactive_questions: ProactiveQuestionsConfig = Field(default_factory=ProactiveQuestionsConfig)
     # privacy: the pony can only look at your screen when you turn this on
     screenshot_enabled: bool = False
     # scan your messages for passing promises ("I'll call mom later") and

@@ -17,8 +17,10 @@ from .brain import PonyBrain
 from .channels import Channel
 from .characters import get_character
 from .config import Config, config_path, data_dir, db_path
+from .context_questions import ProactiveQuestioner
 from .goals import GoalEngine
 from .logwatch import read_recent_logs
+from .onboarding import OnboardingManager
 from .rules import RuleEngine
 from .scheduler import ReminderScheduler
 from .tasks import TaskStore
@@ -77,6 +79,22 @@ class Core:
         self.brain._rule_engine = rule_engine
         self.brain._activity_store = self.accountability["activity"]
         self.brain._acct_stores = self.accountability
+
+        # Wire OnboardingManager
+        self.onboarding = OnboardingManager(self.store)
+
+        # Wire ProactiveQuestioner
+        self.proactive_questioner = ProactiveQuestioner(
+            config=config.proactive_questions,
+            store=self.store,
+            onboarding=self.onboarding,
+            quiet_hours_start=config.reminders.quiet_hours_start,
+            quiet_hours_end=config.reminders.quiet_hours_end,
+            activity_store=self.accountability["activity"],
+        )
+        # Inject into brain for tool handlers
+        self.brain._set_proactive_questioner(self.proactive_questioner)
+
         self.scheduler = ReminderScheduler(
             self.store, config.reminders, self._deliver_nudge,
             work_hours=config.reminders.work_hours,
@@ -84,6 +102,7 @@ class Core:
             goal_engine=goal_engine,
             rule_engine=rule_engine,
             activity_store=self.accountability["activity"],
+            proactive_questioner=self.proactive_questioner,
         )
         self.awareness_monitor = AwarenessMonitor(
             config, screenshot_fn, self._make_assessor(), self.store, self._deliver_nudge,
@@ -185,6 +204,25 @@ class Core:
                 log.exception("nudge via %s failed", channel.name)
 
     # ── lifecycle ────────────────────────────────────────────────────
+
+    async def start_onboarding_if_needed(self) -> None:
+        """Initiate first-run onboarding once, after GUI hooks are available.
+
+        Delivers the initial prompt through existing nudge hooks / chat history.
+        Safe to call multiple times -- only fires once (persisted via meta key).
+        """
+        from .onboarding import OnboardingManager
+
+        mgr = OnboardingManager(self.store)
+        if not self.config.onboarding.enabled:
+            return
+        if mgr.status() != "new":
+            return  # already started, completed, or skipped
+        prompt = mgr.begin()
+        mgr.record_prompt(prompt)
+        # Deliver through existing nudge hooks (bubble + chat)
+        await self._deliver_nudge(prompt)
+
     async def start(self) -> None:
         if self.config.telegram.enabled:
             from .telegram_channel import TelegramChannel
@@ -222,6 +260,8 @@ async def run_headless(config: Config) -> None:
     """No pixels: brain + reminders + channels (telegram). Ctrl-C to stop."""
     core = Core(config)
     await core.start()
+    # Onboarding: deliver through existing channels (telegram, etc.)
+    await core.start_onboarding_if_needed()
     if not core.channels:
         log.warning(
             "headless with no channels — enable telegram in %s to actually talk",
@@ -348,6 +388,9 @@ def run_gui(config: Config) -> int:
             chat.add_message("assistant", message)
 
     core.nudge_hooks.append(nudge_gui)
+
+    # ── onboarding: fire initial prompt once, after hooks exist ─────
+    asyncio.ensure_future(core.start_onboarding_if_needed())
 
     # ── menu wiring ──────────────────────────────────────────────────
     def place_chat_near_pony() -> None:
