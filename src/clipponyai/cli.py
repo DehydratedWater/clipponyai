@@ -5,8 +5,11 @@
     clipponyai init         write a default config.yaml and show its path
     clipponyai fetch-sprites  download Desktop Ponies sprites now
     clipponyai tasks        print the current task overview
-    clipponyai doctor       check config, provider keys, sprites, extras
+    clipponyai doctor       check config, provider keys, sprites, extras,
+                            work-hours, logwatch, autostart, permissions
     clipponyai check-llm    smoke-test the active LLM provider (returns 0/1)
+    clipponyai autostart    enable/disable/check login autostart
+    clipponyai install-desktop  install .desktop entry (Linux) / explain (macOS)
 """
 
 from __future__ import annotations
@@ -16,6 +19,8 @@ import asyncio
 import logging
 import os
 import sys
+
+from pathlib import Path
 
 from . import __version__
 from .config import Config, config_path, db_path, sprites_dir
@@ -30,9 +35,11 @@ def _cmd_init(_args) -> int:
     Config().save()
     print(f"wrote default config: {path}")
     print("next steps:")
-    print("  1. pick a provider: edit llm.active (openai/anthropic/openrouter/groq/ollama)")
-    print("  2. export the matching API key env var (not needed for ollama)")
-    print("  3. run `clipponyai` — sprites download on first run")
+    print("  1. pick a provider: edit llm.active")
+    print("     (openai/anthropic/openrouter/groq/ollama/qwen27b-vllm)")
+    print("  2. export the matching API key env var (not needed for ollama or qwen27b-vllm)")
+    print("  3. run `clipponyai check-llm` to verify your provider is reachable")
+    print("  4. run `clipponyai` — sprites download on first run")
     return 0
 
 
@@ -55,6 +62,8 @@ def _cmd_tasks(_args) -> int:
 
 
 def _cmd_doctor(_args) -> int:
+    import platform as _platform
+
     config = Config.load()
     ok = True
 
@@ -78,6 +87,9 @@ def _cmd_doctor(_args) -> int:
         )
         check(f"models: fast={provider.fast_model} slow={provider.resolved_slow_model()} "
               f"vision={provider.resolved_vision_model()}", True)
+        # Local-provider health-check suggestion
+        if provider.base_url and not provider.api_key_env:
+            print(f"  (local endpoint {provider.base_url} — run `clipponyai check-llm` to verify)")
     from .sprite_fetch import have_sprites
     check(f"sprites: {sprites_dir()}", have_sprites(), "run `clipponyai fetch-sprites`")
     try:
@@ -101,6 +113,59 @@ def _cmd_doctor(_args) -> int:
               "add your user id to telegram.allowed_user_ids or the bot answers nobody")
     check(f"screen peeking: {'ON' if config.screenshot_enabled else 'off (private by default)'}",
           True)
+
+    # Work-hours state
+    wh = config.reminders.work_hours
+    if wh.enabled:
+        days = {0: "Mon", 1: "Tue", 2: "Wed", 3: "Thu", 4: "Fri", 5: "Sat", 6: "Sun"}
+        day_names = ", ".join(days[d] for d in wh.weekdays)
+        print(f"  work hours: {wh.start}–{wh.end} ({day_names}), closing nudge={'on' if wh.closing_nudge else 'off'}")
+    else:
+        print("  work hours: disabled")
+
+    # Logwatch privacy/paths
+    lw = config.logwatch
+    if lw.enabled:
+        print(f"  logwatch: enabled ({len(lw.files)} file(s), {lw.max_lines_per_file} lines/file, {lw.max_total_chars} chars total)")
+        for f in lw.files:
+            exists = Path(f).exists()
+            mark = "✓" if exists else "?"
+            print(f"    {mark} {f} {'(found)' if exists else '(not found)'}")
+    else:
+        print("  logwatch: disabled (privacy-safe default)")
+
+    # Autostart status
+    from .install import autostart_status
+    print(f"  autostart: {autostart_status()}")
+
+    # Platform-specific screen permission guidance
+    sys_name = _platform.system()
+    if sys_name == "Darwin" and config.screenshot_enabled:
+        print("  macOS screen recording: grant permission in System Settings → Privacy & Security → Screen Recording")
+        print("  macOS accessibility (cursor chase): grant in System Settings → Privacy & Security → Accessibility")
+    elif sys_name == "Darwin":
+        print("  macOS note: when you enable screen peeking, you will need to grant Screen Recording permission")
+        print("  and Accessibility permission for cursor chasing in System Settings → Privacy & Security")
+
+    # Vision model limitation for text-only local models
+    if known:
+        vision_model = provider.resolved_vision_model()
+        # Local providers without a dedicated vision model use the text model for vision
+        if provider.base_url and not provider.api_key_env:
+            if not provider.vision_model:
+                print(f"  vision model: {vision_model} (text-only local model — screenshots will be text-prompted, not image-understood)")
+
+    # First-run next steps
+    if not have_sprites() or not config_path().exists():
+        print("\nfirst-run next steps:")
+        if not config_path().exists():
+            print("  1. run `clipponyai init` to create your config")
+        if not have_sprites():
+            print("  2. run `clipponyai fetch-sprites` to download pony sprites")
+        print("  3. edit llm.active in config and set your API key (or use ollama/qwen27b-vllm)")
+        print("  4. run `clipponyai check-llm` to verify your provider")
+        print("  5. run `clipponyai` to start the pony")
+
     print("all good ✨" if ok else "fix the ✗ items above")
     return 0 if ok else 1
 

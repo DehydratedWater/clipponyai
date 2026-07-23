@@ -16,6 +16,7 @@ farm, or your own local models if you do.
 pip install clipponyai        # + PySide6 GUI, included
 clipponyai init               # writes ~/.config/clipponyai/config.yaml
 export OPENAI_API_KEY=sk-…    # or any other provider, see below
+clipponyai check-llm          # verify your provider is reachable
 clipponyai                    # 🦄 (sprites download on first run)
 ```
 
@@ -53,6 +54,7 @@ pick one with `llm.active`, export the key, done:
 | `openrouter` | `OPENROUTER_API_KEY` | one key, hundreds of models |
 | `groq` | `GROQ_API_KEY` | very fast, free tier |
 | `ollama` | — | local models, no key, no cloud |
+| `qwen27b-vllm` | — | local Qwen3.5-27B via vLLM on `127.0.0.1:8082` |
 
 Each provider names three models: `fast_model` (chat turns + the small
 "sensor" calls), `slow_model` (the `deep_think` escalation lane) and
@@ -73,6 +75,44 @@ llm:
       slow_model: Qwen/Qwen3-32B
       extra_body: {chat_template_kwargs: {enable_thinking: false}}
 ```
+
+### `qwen27b-vllm` — local Qwen3.5-27B out of the box
+
+The `qwen27b-vllm` preset targets a vLLM server running
+`cyankiwi/Qwen3.5-27B-AWQ-BF16-INT8` on `http://127.0.0.1:8082/v1`. It needs
+no API key and sets `enable_thinking: false` so the model returns normal text
+instead of reasoning tokens. Point your own vLLM instance there or edit the
+`base_url` in config to match your setup.
+
+After starting vLLM, verify connectivity with:
+
+```
+clipponyai check-llm
+```
+
+### Local model vision limitation
+
+Local text-only models (including `qwen27b-vllm`) do not understand images.
+When `screenshot_enabled` is `true` but the active provider has no dedicated
+`vision_model`, screenshots are sent as text prompts rather than being
+image-analysed. For real vision, either:
+
+- Set a `vision_model` that accepts images (e.g. `qwen2.5vl:7b` on Ollama)
+- Use a hosted provider with built-in vision (OpenAI, Anthropic, OpenRouter)
+
+`clipponyai doctor` reports this limitation when detected.
+
+### `clipponyai check-llm`
+
+Smoke-test your active provider before launching the pony:
+
+```
+clipponyai check-llm
+```
+
+Sends a minimal chat turn and prints `ok — <provider> (<model>) replied: …`
+on success (exit 0) or `ERROR: …` on failure (exit 1). Useful in CI,
+docker-entrypoint scripts, or just to confirm your local server is running.
 
 ## How the assistant part works (design notes)
 
@@ -112,11 +152,79 @@ reminders:
   quiet_hours_end: 8
   nudge_gaps_minutes: [30, 60, 120, 240, 360]
   max_nudges: 8
+  work_hours:
+    enabled: false           # set true to activate work-hour boundaries
+    start: "09:00"           # workday start (HH:MM)
+    end: "17:00"             # workday end (HH:MM)
+    weekdays: [0, 1, 2, 3, 4]  # Mon=0 .. Sun=6
+    closing_nudge: true      # list pending tasks at end of workday
+    suppress_off_hours: false  # silence ordinary reminders outside work hours
+logwatch:
+  enabled: false             # privacy-gated: disabled by default
+  files: []                  # explicit absolute paths only
+  max_lines_per_file: 200
+  max_total_chars: 8000
 telegram:
   enabled: false
   token_env: TELEGRAM_BOT_TOKEN     # token from @BotFather
   allowed_user_ids: []              # EMPTY = answers nobody. add your id!
 ```
+
+### Work hours
+
+Work hours let the pony emit a **closing nudge** at the end of each workday,
+listing all still-pending tasks. It fires once per workday (persisted in
+SQLite so it never duplicates) and respects quiet hours.
+
+```yaml
+reminders:
+  work_hours:
+    enabled: true
+    start: "09:00"
+    end: "17:00"
+    weekdays: [0, 1, 2, 3, 4]   # Mon–Fri
+    closing_nudge: true
+```
+
+Set `suppress_off_hours: true` to silence all ordinary reminders outside the
+configured work window (the pony still drops exhausted tasks).
+
+### Privacy-gated log watching
+
+Logwatch lets the pony tail local log files and answer questions about them
+via the FAST LLM lane. It is **disabled by default** and only reads the last
+N lines of explicitly configured absolute paths — no regex, no streaming, no
+service or database access.
+
+```yaml
+logwatch:
+  enabled: true
+  files:
+    - /var/log/myapp/error.log
+    - /home/user/.local/share/myapp/output.log
+  max_lines_per_file: 200
+  max_total_chars: 8000
+```
+
+`clipponyai doctor` reports logwatch state, file count, and whether each
+configured path exists.
+
+### In-app settings dialog
+
+Right-click the pony to open the settings dialog. It covers every config
+section in a tabbed UI:
+
+- **Privacy** — screen peeking toggle, auto-commitment tracking
+- **Pony** — character, size, attention chase duration, idle wandering
+- **Reminders** — enabled, check interval, quiet hours, nudge gaps, max nudges, batch limit
+- **Work Hours** — enable/disable, start/end times, active weekdays, closing nudge, off-hours suppression
+- **Log Watch** — enable/disable, file paths, line/char limits
+- **LLM** — switch active provider
+- **Misc** — autostart on login
+
+Changes validate on Apply and persist to `config.yaml` immediately. Some
+changes (provider switch, character switch) need a restart to take full
+effect.
 
 Telegram setup: `pip install 'clipponyai[telegram]'`, create a bot with
 [@BotFather](https://t.me/BotFather), export the token, put your numeric user
@@ -126,13 +234,49 @@ id in `allowed_user_ids` (ask [@userinfobot](https://t.me/userinfobot)), set
 ## CLI
 
 ```
-clipponyai            run the pony (default)
-clipponyai --headless run without GUI (telegram + reminders only)
-clipponyai init       write the default config
-clipponyai doctor     check config / keys / sprites / extras
-clipponyai tasks      print the task overview in your terminal
+clipponyai              run the pony (default)
+clipponyai --headless   run without GUI (telegram + reminders only)
+clipponyai init         write the default config
+clipponyai doctor       check config / keys / sprites / extras
+clipponyai tasks        print the task overview in your terminal
 clipponyai fetch-sprites   (re)download sprites
+clipponyai check-llm    smoke-test the active LLM provider (returns 0/1)
+clipponyai autostart [enable|disable|status]   manage login autostart
+clipponyai install-desktop       install .desktop entry (Linux) / explain (macOS)
 ```
+
+### `clipponyai doctor`
+
+Reports a full health check including:
+
+- Config file presence and provider/key status
+- Local endpoint health-check suggestion (`check-llm`)
+- Work-hours state (enabled/disabled, schedule, closing nudge)
+- Logwatch privacy status and file path existence
+- Autostart status (enabled/disabled with path)
+- Platform-specific screen permission guidance (macOS Screen Recording + Accessibility)
+- Vision model limitation warnings for text-only local models
+- First-run next steps when sprites or config are missing
+
+### `clipponyai autostart`
+
+Enable, disable, or check login autostart:
+
+```
+clipponyai autostart status    # current state
+clipponyai autostart enable    # install autostart entry
+clipponyai autostart disable   # remove autostart entry
+```
+
+On Linux, writes to `~/.config/autostart/clipponyai.desktop`. On macOS,
+writes to `~/Library/LaunchAgents/clipponyai.plist`. Both are user-level
+only and idempotent.
+
+### `clipponyai install-desktop`
+
+On Linux, installs a `.desktop` file to `~/.local/share/applications/` so the
+app appears in the application menu. On macOS, explains that LaunchAgents
+handle app launch instead.
 
 ## Platforms
 
@@ -140,6 +284,20 @@ Pure Python + Qt: Linux, Windows and macOS all work for the overlay, bubble,
 cursor-chasing and screenshots (`mss`). Most tested on Linux/X11. On Wayland,
 window self-positioning is compositor-dependent — the pony works but may
 wander less precisely.
+
+### macOS permissions
+
+macOS requires explicit user grants for two capabilities:
+
+- **Screen Recording** — needed when `screenshot_enabled: true`. Grant in
+  **System Settings → Privacy & Security → Screen Recording**. After granting,
+  you may need to restart the app (macOS requires relaunch after permission
+  changes).
+- **Accessibility** — needed for cursor-chasing (the pony follows your
+  pointer). Grant in **System Settings → Privacy & Security → Accessibility**.
+
+`clipponyai doctor` prints these instructions when screen peeking is enabled
+on macOS.
 
 ## Licensing
 
@@ -158,5 +316,6 @@ uv venv && uv pip install -e '.[dev,telegram]'
 uv run pytest
 ```
 
-Tests cover the task store, nudge cadence, time parsing, config, sensors and
-the brain's tool loop (with a fake LLM client — no network needed).
+Tests cover the task store, nudge cadence, time parsing, config, sensors,
+the brain's tool loop (with a fake LLM client — no network needed), install
+helpers (with platform and path mocking), and CLI commands.
