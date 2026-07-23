@@ -240,6 +240,30 @@ def test_macos_plist_dict_valid_structure(monkeypatch, tmp_path, fake_home):
     assert d["KeepAlive"] is False
 
 
+def test_macos_plist_log_paths_use_data_dir(monkeypatch, tmp_path, fake_home):
+    """macOS plist stdout/stderr paths are derived from data_dir()."""
+    _patch_macos(monkeypatch, tmp_path, fake_home)
+    from clipponyai.install import _macos_plist_dict
+
+    d = _macos_plist_dict()
+    # data_dir() is patched by conftest to tmp_path / "data"
+    expected_stdout = str(tmp_path / "data" / "stdout.log")
+    expected_stderr = str(tmp_path / "data" / "stderr.log")
+    assert d["StandardOutPath"] == expected_stdout
+    assert d["StandardErrorPath"] == expected_stderr
+
+
+def test_macos_plist_log_paths_accept_custom_data_dir(monkeypatch, tmp_path, fake_home):
+    """_macos_plist_dict accepts an explicit data_directory argument."""
+    _patch_macos(monkeypatch, tmp_path, fake_home)
+    from clipponyai.install import _macos_plist_dict
+
+    custom = tmp_path / "custom_data"
+    d = _macos_plist_dict(data_directory=custom)
+    assert d["StandardOutPath"] == str(custom / "stdout.log")
+    assert d["StandardErrorPath"] == str(custom / "stderr.log")
+
+
 def test_macos_plist_bytes_roundtrips(monkeypatch, tmp_path, fake_home):
     """plistlib.dumps output can be parsed back with plistlib.loads."""
     _patch_macos(monkeypatch, tmp_path, fake_home)
@@ -272,6 +296,19 @@ def test_macos_enable_autostart_creates_plist(monkeypatch, tmp_path, fake_home):
     path = _macos_plist_path()
     assert path.exists()
     assert "installed autostart" in msg
+
+
+def test_macos_enable_autostart_creates_data_dir(monkeypatch, tmp_path, fake_home):
+    """enable_autostart creates the data directory so log files can be written."""
+    _patch_macos(monkeypatch, tmp_path, fake_home)
+    # data_dir() resolves to tmp_path / "data" (patched by conftest)
+    # Ensure it does not exist yet
+    data_directory = tmp_path / "data"
+    assert not data_directory.exists()
+    from clipponyai.install import enable_autostart
+
+    enable_autostart()
+    assert data_directory.is_dir()
 
 
 def test_macos_enable_autostart_idempotent(monkeypatch, tmp_path, fake_home):

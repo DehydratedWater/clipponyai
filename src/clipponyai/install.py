@@ -150,21 +150,25 @@ def _macos_plist_path() -> Path:
 # ── macOS plist generation ─────────────────────────────────────────────
 
 
-def _macos_plist_dict() -> dict:
-    """Build a valid LaunchAgent plist dictionary."""
+def _macos_plist_dict(data_directory: Path | None = None) -> dict:
+    """Build a valid LaunchAgent plist dictionary.
+
+    *data_directory* defaults to ``data_dir()`` when ``None``.
+    """
+    data_directory = data_directory or data_dir()
     return {
         "Label": APP_NAME,
         "ProgramArguments": [sys.executable, "-m", "clipponyai"],
         "RunAtLoad": True,
         "KeepAlive": False,
-        "StandardOutPath": os.path.expanduser(f"~/.local/share/{APP_NAME}/stdout.log"),
-        "StandardErrorPath": os.path.expanduser(f"~/.local/share/{APP_NAME}/stderr.log"),
+        "StandardOutPath": str(data_directory / "stdout.log"),
+        "StandardErrorPath": str(data_directory / "stderr.log"),
     }
 
 
-def _macos_plist_bytes() -> bytes:
+def _macos_plist_bytes(data_directory: Path | None = None) -> bytes:
     """Serialize the LaunchAgent plist to XML bytes."""
-    return plistlib.dumps(_macos_plist_dict())
+    return plistlib.dumps(_macos_plist_dict(data_directory))
 
 
 # ── public API: autostart ──────────────────────────────────────────────
@@ -183,6 +187,9 @@ def enable_autostart() -> str:
             return f"installed autostart: {path}"
         return f"autostart already present: {path}"
     if _is_macos():
+        # Ensure the data directory (parent of log paths) exists so the
+        # launchd process can write stdout/stderr without failing.
+        data_dir().mkdir(parents=True, exist_ok=True)
         path = _macos_plist_path()
         content_bytes = _macos_plist_bytes()
         written = _idempotent_write_bytes(path, content_bytes)
