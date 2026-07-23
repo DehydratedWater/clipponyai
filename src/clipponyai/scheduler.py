@@ -62,11 +62,23 @@ def in_work_hours(now: datetime, config: WorkHoursConfig) -> bool:
 
 
 def closing_due(now: datetime, config: WorkHoursConfig) -> bool:
-    """Pure function: is it time for the closing nudge?
+    """Pure function: is the workday closing reminder due?
 
-    Returns True when *now* is within the last check-interval window before
-    work-hours end on a workday.  The caller must still check quiet-hours
-    and once-per-day persistence.
+    Returns True when the configured end time has passed (or arrived) on an
+    active workday *and* today's closing meta was not yet recorded.
+
+    Deterministic semantics:
+
+    - Fires **once** per workday when ``now >= end_time`` on that day.
+    - Does **not** fire before end time.
+    - Does **not** fire on inactive (non-workday) days.
+    - Does **not** fire for a previous day after midnight (the day-key in
+      the meta table naturally prevents this: tomorrow's key is different,
+      and ``closing_due`` for tomorrow is still False until tomorrow's end
+      time arrives).
+
+    The caller must still check quiet-hours precedence and once-per-day
+    meta persistence.
     """
     if not config.enabled or not config.closing_nudge:
         return False
@@ -74,8 +86,9 @@ def closing_due(now: datetime, config: WorkHoursConfig) -> bool:
         return False
     end = _parse_hhmm(config.end)
     t = now.time()
-    # fire during the end-hour (e.g. 17:00-17:59 for end=17:00)
-    return t.hour == end.hour
+    # fire once the configured end time has arrived or passed
+    # (e.g. end=17:00 -> True at 17:00, 17:30, 18:00, … up to 23:59)
+    return t >= end
 
 
 class ReminderScheduler:

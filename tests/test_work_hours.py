@@ -187,6 +187,10 @@ class TestClosingDue:
         wh = _wh(closing_nudge=False)
         assert closing_due(WED.replace(hour=17), wh) is False
 
+    def test_at_end_time_exact(self):
+        wh = _wh()
+        assert closing_due(WED.replace(hour=17, minute=0, second=0), wh) is True
+
     def test_during_end_hour(self):
         wh = _wh()
         assert closing_due(WED.replace(hour=17, minute=0), wh) is True
@@ -197,9 +201,12 @@ class TestClosingDue:
         wh = _wh()
         assert closing_due(WED.replace(hour=16, minute=59), wh) is False
 
-    def test_after_end_hour(self):
+    def test_after_end_hour_still_due(self):
+        """After the end hour the closing is still due — the meta table
+        prevents double-firing, not closing_due itself."""
         wh = _wh()
-        assert closing_due(WED.replace(hour=18), wh) is False
+        assert closing_due(WED.replace(hour=18), wh) is True
+        assert closing_due(WED.replace(hour=23, minute=59), wh) is True
 
     def test_weekend_no_closing(self):
         wh = _wh()
@@ -209,6 +216,32 @@ class TestClosingDue:
         wh = _wh(end="18:00")
         assert closing_due(WED.replace(hour=18), wh) is True
         assert closing_due(WED.replace(hour=17), wh) is False
+
+    def test_end_time_with_minutes(self):
+        """End time 17:30 — fires at 17:30+, not at 17:00."""
+        wh = _wh(end="17:30")
+        assert closing_due(WED.replace(hour=17, minute=0), wh) is False
+        assert closing_due(WED.replace(hour=17, minute=29), wh) is False
+        assert closing_due(WED.replace(hour=17, minute=30), wh) is True
+        assert closing_due(WED.replace(hour=17, minute=31), wh) is True
+        assert closing_due(WED.replace(hour=18), wh) is True
+
+    def test_late_tick_after_large_interval(self):
+        """With a 3600-second check interval the process can wake well after
+        the end hour.  closing_due must still return True so the meta-table
+        gate can fire the reminder once."""
+        wh = _wh()  # end=17:00
+        # Process slept through 17:xx and woke at 18:05
+        assert closing_due(WED.replace(hour=18, minute=5), wh) is True
+
+    def test_next_day_not_due_before_end(self):
+        """On the next calendar day, closing_due is False until that day's
+        end time arrives — preventing stale firing for yesterday."""
+        wh = _wh()
+        thu = datetime(2026, 7, 23)
+        assert closing_due(thu.replace(hour=9), wh) is False
+        assert closing_due(thu.replace(hour=16, minute=59), wh) is False
+        assert closing_due(thu.replace(hour=17), wh) is True
 
 
 # ── TaskStore meta table ─────────────────────────────────────────────
@@ -341,7 +374,7 @@ class TestClosingNudgeIntegration:
 
 class TestSuppressOffHours:
     async def test_suppress_outside_work_hours(self, store, delivered):
-        wh = _wh(suppress_off_hours=True)
+        wh = _wh(suppress_off_hours=True, closing_nudge=False)
         cfg = RemindersConfig()
         async def deliver(msg):
             delivered.append(msg)
@@ -372,7 +405,7 @@ class TestSuppressOffHours:
         assert msg is not None
 
     async def test_suppress_still_drops_exhausted_tasks(self, store, delivered):
-        wh = _wh(suppress_off_hours=True)
+        wh = _wh(suppress_off_hours=True, closing_nudge=False)
         async def deliver(msg):
             delivered.append(msg)
         sched = ReminderScheduler(store, RemindersConfig(), deliver, work_hours=wh)
@@ -456,3 +489,94 @@ class TestClosingPersistence:
         msg2 = await sched2.tick(WED.replace(hour=17, minute=30))
         assert msg2 is None  # already fired
         s2.close()
+
+
+# ── boundary tests: large intervals, late ticks, restart idempotency ──
+
+class TestClosingBoundary:
+    async def test_large_interval_misses_end_hour_then_fires(self, store, delivered):
+        """check_interval_seconds=3600, process wakes at 18:05 — after
+        the 17:00 end hour.  The closing nudge must still fire."""
+        wh = _wh()  # end=17:00
+        cfg = RemindersConfig(check_interval_seconds=3600)
+        async def deliver(msg):
+            delivered.append(msg)
+        sched = ReminderScheduler(store, cfg, deliver, work_hours=wh)
+        store.add("urgent report")
+        # Simulate: tick at 16:30 (before end) — nothing
+        msg = await sched.tick(WED.replace(hour=16, minute=30))
+        assert msg is None
+        # Next tick at 18:05 (missed 17:xx entirely) — closing fires
+        msg = await sched.tick(WED.replace(hour=18, minute=5))
+        assert msg is not None
+        assert "End of workday" in msg
+        assert "urgent report" in msg
+
+    async def test_restart_after_missed_closing_is_idempotent(self, store, delivered):
+        """Process crashed after firing closing at 18:05.  Restarting at 18:30
+        must not fire again."""
+        wh = _wh()
+        async def deliver(msg):
+            delivered.append(msg)
+        sched = ReminderScheduler(store, RemindersConfig(), deliver, work_hours=wh)
+        store.add("task one")
+        msg = await sched.tick(WED.replace(hour=18, minute=5))
+        assert msg is not None
+        # Simulate restart — same day, later
+        delivered.clear()
+        msg2 = await sched.tick(WED.replace(hour=18, minute=30))
+        assert msg2 is None
+        assert delivered == []
+
+    async def test_restart_next_day_fires_again(self, store, delivered):
+        """After firing Wednesday closing, Thursday's closing fires independently."""
+        wh = _wh()
+        async def deliver(msg):
+            delivered.append(msg)
+        sched = ReminderScheduler(store, RemindersConfig(), deliver, work_hours=wh)
+        store.add("task one")
+        msg = await sched.tick(WED.replace(hour=18))
+        assert msg is not None
+        delivered.clear()
+        thu = datetime(2026, 7, 23)
+        msg2 = await sched.tick(thu.replace(hour=18))
+        assert msg2 is not None
+        assert "End of workday" in msg2
+
+    async def test_midnight_does_not_fire_yesterdays_closing(self, store, delivered):
+        """Process wakes at 00:05 Thursday after missing Wednesday closing.
+        It must NOT fire Wednesday's closing (that day is over)."""
+        wh = _wh()
+        async def deliver(msg):
+            delivered.append(msg)
+        sched = ReminderScheduler(store, RemindersConfig(), deliver, work_hours=wh)
+        store.add("task one")
+        thu = datetime(2026, 7, 23)
+        msg = await sched.tick(thu.replace(hour=0, minute=5))
+        # 00:05 is before 17:00, so closing_due is False
+        assert msg is None
+        assert delivered == []
+
+    async def test_quiet_hours_still_block_late_closing(self, store, delivered):
+        """Even with late-wake semantics, quiet hours still suppress closing."""
+        wh = _wh(end="23:00")
+        cfg = RemindersConfig(quiet_hours_start=22, quiet_hours_end=6)
+        async def deliver(msg):
+            delivered.append(msg)
+        sched = ReminderScheduler(store, cfg, deliver, work_hours=wh)
+        store.add("task one")
+        # 23:30 is past end (23:00) but inside quiet hours (22-6)
+        msg = await sched.tick(WED.replace(hour=23, minute=30))
+        assert msg is None
+
+    async def test_end_time_with_minutes_large_interval(self, store, delivered):
+        """End=17:30, interval=3600, wakes at 18:10 — must fire."""
+        wh = _wh(end="17:30")
+        cfg = RemindersConfig(check_interval_seconds=3600)
+        async def deliver(msg):
+            delivered.append(msg)
+        sched = ReminderScheduler(store, cfg, deliver, work_hours=wh)
+        store.add("task one")
+        msg = await sched.tick(WED.replace(hour=18, minute=10))
+        assert msg is not None
+        assert "End of workday" in msg
