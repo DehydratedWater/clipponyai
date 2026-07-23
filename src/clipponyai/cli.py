@@ -105,6 +105,27 @@ def _cmd_doctor(_args) -> int:
     return 0 if ok else 1
 
 
+def _cmd_autostart(args) -> int:
+    from .install import autostart_status, disable_autostart, enable_autostart
+
+    if args.action == "enable":
+        msg = enable_autostart()
+    elif args.action == "disable":
+        msg = disable_autostart()
+    else:
+        msg = autostart_status()
+    print(msg)
+    return 0
+
+
+def _cmd_install_desktop(_args) -> int:
+    from .install import install_desktop
+
+    msg = install_desktop()
+    print(msg)
+    return 0
+
+
 def _cmd_check_llm(_args) -> int:
     """Smoke-test the active LLM provider: send a minimal chat turn, return 0/1."""
     from open_agent_compiler import AgentDefinition, AgentHeader
@@ -200,11 +221,22 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("doctor", help="check your setup")
     sub.add_parser("check-llm", help="smoke-test the active LLM provider")
 
+    # autostart subcommand
+    auto_parser = sub.add_parser("autostart", help="enable/disable/check autostart")
+    auto_parser.add_argument(
+        "action", nargs="?", default="status",
+        choices=["enable", "disable", "status"],
+        help="action (default: status)",
+    )
+
+    sub.add_parser("install-desktop", help="install desktop entry (Linux) / explain (macOS)")
+
     args = parser.parse_args(argv)
     commands = {
         None: _cmd_run, "run": _cmd_run, "init": _cmd_init,
         "fetch-sprites": _cmd_fetch_sprites, "tasks": _cmd_tasks,
         "doctor": _cmd_doctor, "check-llm": _cmd_check_llm,
+        "autostart": _cmd_autostart, "install-desktop": _cmd_install_desktop,
     }
     return commands[args.command](args)
 
