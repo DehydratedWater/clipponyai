@@ -831,6 +831,34 @@ class AccountabilityRuleStore:
             )
 
 
+    def record_fire_at(self, rule_id: int, fired_at: datetime) -> AccountabilityRule:
+        """Record a rule fire at a specific datetime (for deterministic testing)."""
+        ts = fired_at.strftime(ISO)
+        with self._store._lock:
+            self._store._conn.execute(
+                "UPDATE accountability_rules SET last_fired_at=? WHERE id=?",
+                (ts, rule_id),
+            )
+            self._store._conn.commit()
+            return self._row(
+                self._store._conn.execute(
+                    "SELECT * FROM accountability_rules WHERE id=?", (rule_id,)
+                ).fetchone()
+            )
+
+    def delete(self, rule_id: int) -> None:
+        with self._store._lock:
+            row = self._store._conn.execute(
+                "SELECT * FROM accountability_rules WHERE id=?", (rule_id,)
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"no rule #{rule_id}")
+            self._store._conn.execute(
+                "DELETE FROM accountability_rules WHERE id=?", (rule_id,)
+            )
+            self._store._conn.commit()
+
+
 class ActivityStore:
     """Activity log with hard 200-entry retention."""
 
