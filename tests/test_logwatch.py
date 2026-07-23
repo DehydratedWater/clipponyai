@@ -222,6 +222,16 @@ def test_recent_logs_tool_enabled_calls_fast_lane(make_brain, config, tmp_path):
     assert result == "The service hit a connection error and is retrying."
 
 
+def test_recent_logs_tool_uses_injected_source(make_brain, config):
+    config.logwatch = LogWatchConfig(enabled=True, files=[])
+    brain = make_brain({"log-analyst": "The injected service is healthy."})
+    brain.log_fn = lambda: "INFO injected service healthy\n"
+
+    result = brain._tool_recent_logs({"question": "is the service healthy?"})
+
+    assert result == "The injected service is healthy."
+
+
 def test_recent_logs_tool_empty_logs_message(make_brain, config):
     config.logwatch = LogWatchConfig(enabled=True, files=["/nonexistent/log.log"])
     brain = make_brain({"log-analyst": "nothing"})

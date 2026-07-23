@@ -564,7 +564,9 @@ class PonyBrain:
             return ("ERROR: log watching is disabled — the user can turn it on in "
                     "settings (or config.yaml: logwatch.enabled)")
         question = str(args.get("question", "")) or "Summarize what happened recently."
-        log_text = read_recent_logs(self.config.logwatch)
+        log_text = (
+            self.log_fn() if self.log_fn is not None else read_recent_logs(self.config.logwatch)
+        )
         if not log_text:
             return "No log content available (files may be empty or not yet written)."
         result = self._run(
