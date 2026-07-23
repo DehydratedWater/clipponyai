@@ -78,7 +78,7 @@ class ErrorLabel(QLabel):
     """Label that shows inline validation errors in red."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init("", parent)
+        super().__init__("", parent)
         self.setProperty("error", True)
         self.setVisible(False)
 
@@ -361,7 +361,7 @@ def _build_logwatch_tab(form: SettingsForm) -> QWidget:
     paths_list = QListWidget()
     for p in form.logwatch_paths:
         paths_list.addItem(p)
-    paths_list.setPlaceholderText("Add absolute paths below…")
+    paths_list.setAccessibleDescription("Configured absolute log file paths")
 
     add_path_row = QHBoxLayout()
     path_line = QLineEdit()
