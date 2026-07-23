@@ -187,7 +187,11 @@ def validate(form: SettingsForm, *, available_providers: list[str],
 
     # logwatch
     for p in form.logwatch_paths:
-        if p and not Path(p).expanduser().is_absolute():
+        if not p:
+            errors.append("Log path must not be blank")
+            break
+        expanded = str(Path(p).expanduser())
+        if not Path(expanded).is_absolute():
             errors.append(f"Log path must be absolute: {p!r}")
             break
     if form.logwatch_max_lines < 1:
@@ -240,7 +244,7 @@ def apply_to_config(form: SettingsForm, config: Config) -> None:
 
     lw = config.logwatch
     lw.enabled = form.logwatch_enabled
-    lw.files = list(form.logwatch_paths)
+    lw.files = [str(Path(p).expanduser()) for p in form.logwatch_paths]
     lw.max_lines_per_file = form.logwatch_max_lines
     lw.max_total_chars = form.logwatch_max_chars
 
@@ -274,5 +278,10 @@ def needs_restart(changes: dict[str, bool]) -> list[str]:
         reasons.append(
             "Character switch takes full effect after restart "
             "(the pony's sprites and personality reload cleanly)."
+        )
+    if changes.get("pony_scale"):
+        reasons.append(
+            "Pony size change takes effect after restart "
+            "(the window geometry and sprites reload cleanly)."
         )
     return reasons

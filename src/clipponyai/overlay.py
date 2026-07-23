@@ -160,6 +160,10 @@ class PonyWindow(QWidget):
         self.state = "idle"
         self._apply_visual()
 
+    def set_idle_wander(self, on: bool) -> None:
+        """Toggle idle wandering at runtime (applies immediately)."""
+        self._idle_wander = on
+
     # ── geometry helpers ─────────────────────────────────────────────
     def _area(self):
         screen = QApplication.screenAt(self.pos()) or QApplication.primaryScreen()

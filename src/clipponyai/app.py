@@ -153,17 +153,17 @@ def _open_settings(pony, config: Config) -> None:
     dialog = SettingsDialog(
         config,
         available_providers=sorted(config.llm.providers),
+        autostart_enabled=auto_on,
         enable_autostart_fn=enable_autostart,
         disable_autostart_fn=disable_autostart,
         parent=pony,
     )
-    dialog.form.autostart_enabled = auto_on
-    dialog._original.autostart_enabled = auto_on  # type: ignore[attr-defined]
     result = dialog.exec()
     if result == QDialog.Accepted:
         pony.say("settings saved!", msec=4000)
         # apply live-safe changes
         pony.screenshot_enabled = config.screenshot_enabled
+        pony.set_idle_wander(config.ui.idle_wander)
 
 
 # ── Qt shell ──────────────────────────────────────────────────────────

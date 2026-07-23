@@ -338,8 +338,20 @@ class TestValidate:
         errors = validate(form, available_providers=self._providers())
         assert any("log" in e.lower() and "absolute" in e.lower() for e in errors)
 
-    def test_log_path_absolute_ok(self):
-        form = SettingsForm(logwatch_paths=["/var/log/app.log"])
+    def test_log_path_blank(self):
+        form = SettingsForm(logwatch_paths=[""])
+        errors = validate(form, available_providers=self._providers())
+        assert any("blank" in e.lower() or "must not" in e.lower() for e in errors)
+
+    def test_log_path_tilde_accepted_by_validation(self):
+        """~/ paths pass validation because apply_to_config normalizes them."""
+        form = SettingsForm(logwatch_paths=["~/my.log"])
+        errors = validate(form, available_providers=self._providers())
+        assert not any("absolute" in e.lower() for e in errors)
+
+    def test_log_path_expanded_absolute_ok(self):
+        """An already-expanded absolute path is fine."""
+        form = SettingsForm(logwatch_paths=["/home/user/my.log"])
         errors = validate(form, available_providers=self._providers())
         assert not any("log" in e.lower() for e in errors)
 
@@ -437,9 +449,10 @@ class TestDetectChanges:
 
 
 class TestNeedsRestart:
-    def test_no_restart_for_ui_change(self):
+    def test_restart_for_scale(self):
         reasons = needs_restart({"pony_scale": True})
-        assert reasons == []
+        assert len(reasons) >= 1
+        assert any("size" in r.lower() or "scale" in r.lower() for r in reasons)
 
     def test_no_restart_for_reminder_change(self):
         reasons = needs_restart({"reminders_enabled": True})
@@ -611,3 +624,36 @@ class TestFullRoundTrip:
         assert loaded.logwatch.max_lines_per_file == 500
         assert loaded.logwatch.max_total_chars == 15000
         assert loaded.llm.active == "anthropic"
+
+    def test_logwatch_tilde_path_normalized_on_apply(self, tmp_path):
+        """~/ paths in the form are expanded to absolute paths when applied."""
+        config = Config()
+        form = read_form(config)
+        form.logwatch_paths = ["~/myapp.log"]
+        # validation accepts ~/ because it expands to absolute
+        errors = validate(form, available_providers=sorted(config.llm.providers))
+        assert not any("absolute" in e.lower() for e in errors)
+        apply_to_config(form, config)
+        # config must have the expanded absolute path
+        assert len(config.logwatch.files) == 1
+        assert config.logwatch.files[0].startswith("/")
+        assert "~" not in config.logwatch.files[0]
+        # saving and reloading must succeed (Config rejects ~/ paths)
+        path = tmp_path / "config.yaml"
+        config.save(path)
+        loaded = Config.load(path)
+        assert loaded.logwatch.files == config.logwatch.files
+
+    def test_logwatch_blank_path_rejected_by_validation(self):
+        """Blank log paths are caught by validation."""
+        form = SettingsForm(logwatch_paths=["/var/log/a.log", ""])
+        errors = validate(form, available_providers=["openai"])
+        assert any("blank" in e.lower() for e in errors)
+
+    def test_autostart_enabled_passed_to_form(self):
+        """autostart_enabled kwarg populates the form correctly."""
+        config = Config()
+        form = read_form(config, autostart_enabled=True)
+        assert form.autostart_enabled is True
+        form2 = read_form(config, autostart_enabled=False)
+        assert form2.autostart_enabled is False

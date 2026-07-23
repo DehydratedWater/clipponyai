@@ -91,6 +91,18 @@ class ErrorLabel(QLabel):
 # Each returns a QWidget with _apply() and optionally _set_errors(mapping).
 
 
+def _add_log_path(paths_list: QListWidget, path_line: QLineEdit) -> None:
+    """Add a log path after expanding ~ and rejecting blanks."""
+    from pathlib import Path as _Path
+
+    raw = path_line.text().strip()
+    if not raw:
+        return
+    expanded = str(_Path(raw).expanduser())
+    paths_list.addItem(expanded)
+    path_line.clear()
+
+
 def _build_privacy_tab(form: SettingsForm) -> QWidget:
     page = QWidget()
     lay = QVBoxLayout(page)
@@ -372,7 +384,7 @@ def _build_logwatch_tab(form: SettingsForm) -> QWidget:
 
     add_btn = QPushButton_("+")
     add_btn.setFixedWidth(30)
-    add_btn.clicked.connect(lambda: paths_list.addItem(path_line.text().strip()) or path_line.clear())
+    add_btn.clicked.connect(lambda: _add_log_path(paths_list, path_line))
     add_path_row.addWidget(path_line)
     add_path_row.addWidget(add_btn)
     add_path_row.addStretch()
@@ -405,7 +417,9 @@ def _build_logwatch_tab(form: SettingsForm) -> QWidget:
 
     def apply() -> None:
         form.logwatch_enabled = chk_enabled.isChecked()
-        form.logwatch_paths = [paths_list.item(i).text() for i in range(paths_list.count())]
+        from pathlib import Path as _Path
+        raw_paths = [paths_list.item(i).text() for i in range(paths_list.count())]
+        form.logwatch_paths = [str(_Path(p).expanduser()) for p in raw_paths]
         form.logwatch_max_lines = lines_spin.value()
         form.logwatch_max_chars = chars_spin.value()
 
@@ -489,6 +503,7 @@ class SettingsDialog(QDialog):
         config: Config,
         *,
         available_providers: list[str],
+        autostart_enabled: bool = False,
         enable_autostart_fn: Callable[[], str] | None = None,
         disable_autostart_fn: Callable[[], str] | None = None,
         parent: QWidget | None = None,
@@ -503,9 +518,10 @@ class SettingsDialog(QDialog):
         self.setMinimumSize(480, 520)
         self.setStyleSheet(_DIALOG_STYLE)
 
-        # read current values
-        self.form = read_form(config)
-        self._original = read_form(config)  # snapshot for diff
+        # read current values — autostart_enabled must be set before building tabs
+        # so the Misc tab's checkbox reflects actual state
+        self.form = read_form(config, autostart_enabled=autostart_enabled)
+        self._original = read_form(config, autostart_enabled=autostart_enabled)  # snapshot for diff
 
         main_lay = QVBoxLayout(self)
         main_lay.setContentsMargins(12, 12, 12, 12)
@@ -619,13 +635,15 @@ class SettingsDialog(QDialog):
         changes = detect_changes(self._original, self.form)
 
         # Autostart is the only setting with an OS side effect. Run it only
-        # after an explicit checkbox change and surface failures in the dialog.
+        # when the checkbox value actually changed and surface failures in the dialog.
         if changes.get("autostart_enabled"):
             try:
-                if self.form.autostart_enabled and self._enable_autostart_fn:
-                    self._enable_autostart_fn()
-                elif not self.form.autostart_enabled and self._disable_autostart_fn:
-                    self._disable_autostart_fn()
+                if self.form.autostart_enabled:
+                    if self._enable_autostart_fn:
+                        self._enable_autostart_fn()
+                else:
+                    if self._disable_autostart_fn:
+                        self._disable_autostart_fn()
             except (OSError, RuntimeError) as exc:
                 self._error_banner.setText(f"Could not update autostart: {exc}")
                 self._error_banner.setVisible(True)
