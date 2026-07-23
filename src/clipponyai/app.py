@@ -15,6 +15,7 @@ from .brain import PonyBrain
 from .channels import Channel
 from .characters import get_character
 from .config import Config, config_path, data_dir, db_path
+from .logwatch import read_recent_logs
 from .scheduler import ReminderScheduler
 from .tasks import TaskStore
 
@@ -31,7 +32,9 @@ class Core:
         self.config = config
         self.store = TaskStore(db_path())
         self.brain = PonyBrain(
-            config, self.store, screenshot_fn=screenshot_fn, client_factory=client_factory
+            config, self.store, screenshot_fn=screenshot_fn,
+            log_fn=lambda: read_recent_logs(config.logwatch),
+            client_factory=client_factory,
         )
         self.scheduler = ReminderScheduler(
             self.store, config.reminders, self._deliver_nudge,

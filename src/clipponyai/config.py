@@ -173,6 +173,35 @@ class RemindersConfig(BaseModel):
     work_hours: WorkHoursConfig = Field(default_factory=WorkHoursConfig)
 
 
+class LogWatchConfig(BaseModel):
+    """Privacy-gated log awareness: disabled by default, explicit paths only.
+
+    When enabled, the pony can tail the last N lines of the configured local
+    files and answer questions about them via the FAST LLM lane.  No regex,
+    no unbounded reads, no touching services or databases.
+    """
+
+    enabled: bool = False
+    files: list[str] = Field(default_factory=list)  # explicit absolute paths
+    max_lines_per_file: int = 200
+    max_total_chars: int = 8000
+
+    @field_validator("max_lines_per_file", "max_total_chars")
+    @classmethod
+    def _positive(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("must be positive")
+        return v
+
+    @field_validator("files")
+    @classmethod
+    def _paths_must_be_absolute(cls, v: list[str]) -> list[str]:
+        for p in v:
+            if not Path(p).is_absolute():
+                raise ValueError(f"log path must be absolute: {p!r}")
+        return v
+
+
 class TelegramConfig(BaseModel):
     enabled: bool = False
     token_env: str = "TELEGRAM_BOT_TOKEN"
@@ -193,6 +222,7 @@ class Config(BaseModel):
     llm: LLMConfig = Field(default_factory=LLMConfig)
     reminders: RemindersConfig = Field(default_factory=RemindersConfig)
     telegram: TelegramConfig = Field(default_factory=TelegramConfig)
+    logwatch: LogWatchConfig = Field(default_factory=LogWatchConfig)
     # privacy: the pony can only look at your screen when you turn this on
     screenshot_enabled: bool = False
     # scan your messages for passing promises ("I'll call mom later") and

@@ -40,6 +40,7 @@ from open_agent_compiler.interactive.spec import ToolSpec
 
 from .characters import build_system_prompt, get_character
 from .config import Config
+from .logwatch import read_recent_logs
 from .providers import FAST, SLOW, VISION, make_live_profile
 from .tasks import TaskStore, content_tokens
 from .timeparse import parse_when as parse_when_offline
@@ -193,6 +194,26 @@ TOOL_SPECS: list[ToolSpec] = [
             "required": ["question"],
         },
     ),
+    ToolSpec(
+        name="recent_logs",
+        description=(
+            "Read the recent tail of configured local log files and answer a "
+            "question about them. Only works when log watching is enabled in "
+            "settings; returns an error if disabled. Use this when the user asks "
+            "what happened in a service log, whether something errored, or to "
+            "summarize recent log activity."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "question": {
+                    "type": "string",
+                    "description": "what to find or summarize in the logs",
+                },
+            },
+            "required": ["question"],
+        },
+    ),
 ]
 
 
@@ -218,11 +239,13 @@ class PonyBrain:
         config: Config,
         store: TaskStore,
         screenshot_fn: Callable[[], bytes | None] | None = None,
+        log_fn: Callable[[], str] | None = None,
         client_factory: Callable[[Any], Any] | None = None,  # tests inject fakes
     ) -> None:
         self.config = config
         self.store = store
         self.screenshot_fn = screenshot_fn
+        self.log_fn = log_fn
         self.client_factory = client_factory
         self.character_slug = config.ui.character
         self.provider_name = config.llm.active
@@ -534,3 +557,23 @@ class PonyBrain:
             }],
         )
         return result.output_text or f"ERROR: vision call failed ({result.error})"
+
+    def _tool_recent_logs(self, args: dict) -> str:
+        """Tail configured log files and delegate the question to the FAST lane."""
+        if not self.config.logwatch.enabled:
+            return ("ERROR: log watching is disabled — the user can turn it on in "
+                    "settings (or config.yaml: logwatch.enabled)")
+        question = str(args.get("question", "")) or "Summarize what happened recently."
+        log_text = read_recent_logs(self.config.logwatch)
+        if not log_text:
+            return "No log content available (files may be empty or not yet written)."
+        result = self._run(
+            self._sensor_spec(
+                "You answer questions about log file content accurately and concisely. "
+                "Quote relevant lines when helpful. Say 'nothing relevant found' if "
+                "the logs do not address the question.",
+                "log-analyst",
+            ),
+            f"Question: {question}\n\nLog content:\n{log_text}",
+        )
+        return result.output_text or "ERROR: log analysis failed."
