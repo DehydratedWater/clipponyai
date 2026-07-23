@@ -6,6 +6,7 @@ writes outside tmp_path.  No real autostart/desktop files are touched.
 
 from __future__ import annotations
 
+import os
 import plistlib
 import sys
 from pathlib import Path
@@ -41,6 +42,17 @@ def _patch_macos(monkeypatch, tmp_path, fake_home):
     monkeypatch.setattr("clipponyai.install._SYSTEM", "Darwin")
     monkeypatch.setattr("clipponyai.install.platform.system", lambda: "Darwin")
     return tmp_path
+
+
+def _mock_icon(monkeypatch, tmp_path):
+    """Pre-generate a fake icon so ensure_icon is a no-op.
+
+    Returns the icon path.
+    """
+    icon_path = tmp_path / "icon.png"
+    icon_path.touch()
+    monkeypatch.setattr("clipponyai.install._linux_icon_path", lambda: icon_path)
+    return icon_path
 
 
 # ── Linux: .desktop entry generation ───────────────────────────────────
@@ -81,6 +93,7 @@ def test_linux_desktop_entry_custom_icon(monkeypatch, tmp_path, fake_home):
 
 def test_linux_enable_autostart_creates_file(monkeypatch, tmp_path, fake_home):
     _patch_linux(monkeypatch, tmp_path, fake_home)
+    _mock_icon(monkeypatch, tmp_path)
     from clipponyai.install import enable_autostart, _linux_autostart_path
 
     msg = enable_autostart()
@@ -91,6 +104,7 @@ def test_linux_enable_autostart_creates_file(monkeypatch, tmp_path, fake_home):
 
 def test_linux_enable_autostart_idempotent(monkeypatch, tmp_path, fake_home):
     _patch_linux(monkeypatch, tmp_path, fake_home)
+    _mock_icon(monkeypatch, tmp_path)
     from clipponyai.install import enable_autostart
 
     msg1 = enable_autostart()
@@ -99,8 +113,49 @@ def test_linux_enable_autostart_idempotent(monkeypatch, tmp_path, fake_home):
     assert "already present" in msg2
 
 
+def test_linux_enable_autostart_generates_icon(monkeypatch, tmp_path, fake_home):
+    """enable_autostart calls ensure_icon, which generates the icon if missing."""
+    _patch_linux(monkeypatch, tmp_path, fake_home)
+    icon_path = tmp_path / "icon.png"
+    monkeypatch.setattr("clipponyai.install._linux_icon_path", lambda: icon_path)
+
+    generated = []
+
+    def fake_generate(path=None):
+        generated.append(path or icon_path)
+        icon_path.write_bytes(b"fake-png")
+        return icon_path
+
+    monkeypatch.setattr("clipponyai.install.generate_icon_png", fake_generate)
+
+    from clipponyai.install import enable_autostart
+
+    msg = enable_autostart()
+    assert len(generated) == 1
+    assert "generated icon" in msg
+    assert "installed autostart" in msg
+
+
+def test_linux_enable_autostart_icon_failure(monkeypatch, tmp_path, fake_home):
+    """enable_autostart returns an error message if icon generation fails."""
+    _patch_linux(monkeypatch, tmp_path, fake_home)
+    icon_path = tmp_path / "icon.png"
+    monkeypatch.setattr("clipponyai.install._linux_icon_path", lambda: icon_path)
+
+    def failing_generate(path=None):
+        raise RuntimeError("no display")
+
+    monkeypatch.setattr("clipponyai.install.generate_icon_png", failing_generate)
+
+    from clipponyai.install import enable_autostart
+
+    msg = enable_autostart()
+    assert "failed to generate icon" in msg
+
+
 def test_linux_disable_autostart_removes_file(monkeypatch, tmp_path, fake_home):
     _patch_linux(monkeypatch, tmp_path, fake_home)
+    _mock_icon(monkeypatch, tmp_path)
     from clipponyai.install import disable_autostart, enable_autostart, _linux_autostart_path
 
     enable_autostart()
@@ -120,6 +175,7 @@ def test_linux_disable_autostart_when_missing(monkeypatch, tmp_path, fake_home):
 
 def test_linux_autostart_status_enabled(monkeypatch, tmp_path, fake_home):
     _patch_linux(monkeypatch, tmp_path, fake_home)
+    _mock_icon(monkeypatch, tmp_path)
     from clipponyai.install import autostart_status, enable_autostart
 
     enable_autostart()
@@ -140,15 +196,7 @@ def test_linux_autostart_status_disabled(monkeypatch, tmp_path, fake_home):
 
 def test_linux_install_desktop_creates_file(monkeypatch, tmp_path, fake_home):
     _patch_linux(monkeypatch, tmp_path, fake_home)
-    # Mock generate_icon_png so it doesn't need QApplication
-    monkeypatch.setattr(
-        "clipponyai.install.generate_icon_png",
-        lambda path=None: path or tmp_path / "icon.png",
-    )
-    (tmp_path / "icon.png").touch()  # pretend icon exists
-    # Also need to mock _linux_icon_path to return our fake icon
-    monkeypatch.setattr("clipponyai.install._linux_icon_path", lambda: tmp_path / "icon.png")
-
+    _mock_icon(monkeypatch, tmp_path)
     from clipponyai.install import install_desktop, _linux_desktop_path
 
     msg = install_desktop()
@@ -158,13 +206,7 @@ def test_linux_install_desktop_creates_file(monkeypatch, tmp_path, fake_home):
 
 def test_linux_install_desktop_idempotent(monkeypatch, tmp_path, fake_home):
     _patch_linux(monkeypatch, tmp_path, fake_home)
-    monkeypatch.setattr(
-        "clipponyai.install.generate_icon_png",
-        lambda path=None: path or tmp_path / "icon.png",
-    )
-    (tmp_path / "icon.png").touch()
-    monkeypatch.setattr("clipponyai.install._linux_icon_path", lambda: tmp_path / "icon.png")
-
+    _mock_icon(monkeypatch, tmp_path)
     from clipponyai.install import install_desktop
 
     install_desktop()
@@ -172,15 +214,49 @@ def test_linux_install_desktop_idempotent(monkeypatch, tmp_path, fake_home):
     assert "already present" in msg
 
 
+def test_linux_install_desktop_generates_icon(monkeypatch, tmp_path, fake_home):
+    """install_desktop calls ensure_icon, which generates the icon if missing."""
+    _patch_linux(monkeypatch, tmp_path, fake_home)
+    icon_path = tmp_path / "icon.png"
+    monkeypatch.setattr("clipponyai.install._linux_icon_path", lambda: icon_path)
+
+    generated = []
+
+    def fake_generate(path=None):
+        generated.append(path or icon_path)
+        icon_path.write_bytes(b"fake-png")
+        return icon_path
+
+    monkeypatch.setattr("clipponyai.install.generate_icon_png", fake_generate)
+
+    from clipponyai.install import install_desktop
+
+    msg = install_desktop()
+    assert len(generated) == 1
+    assert "generated icon" in msg
+    assert "installed desktop entry" in msg
+
+
+def test_linux_install_desktop_icon_failure(monkeypatch, tmp_path, fake_home):
+    """install_desktop returns an error message if icon generation fails."""
+    _patch_linux(monkeypatch, tmp_path, fake_home)
+    icon_path = tmp_path / "icon.png"
+    monkeypatch.setattr("clipponyai.install._linux_icon_path", lambda: icon_path)
+
+    def failing_generate(path=None):
+        raise RuntimeError("no display")
+
+    monkeypatch.setattr("clipponyai.install.generate_icon_png", failing_generate)
+
+    from clipponyai.install import install_desktop
+
+    msg = install_desktop()
+    assert "failed to generate icon" in msg
+
+
 def test_linux_uninstall_desktop(monkeypatch, tmp_path, fake_home):
     _patch_linux(monkeypatch, tmp_path, fake_home)
-    monkeypatch.setattr(
-        "clipponyai.install.generate_icon_png",
-        lambda path=None: path or tmp_path / "icon.png",
-    )
-    (tmp_path / "icon.png").touch()
-    monkeypatch.setattr("clipponyai.install._linux_icon_path", lambda: tmp_path / "icon.png")
-
+    _mock_icon(monkeypatch, tmp_path)
     from clipponyai.install import install_desktop, uninstall_desktop, _linux_desktop_path
 
     install_desktop()
@@ -192,13 +268,7 @@ def test_linux_uninstall_desktop(monkeypatch, tmp_path, fake_home):
 
 def test_linux_desktop_status(monkeypatch, tmp_path, fake_home):
     _patch_linux(monkeypatch, tmp_path, fake_home)
-    monkeypatch.setattr(
-        "clipponyai.install.generate_icon_png",
-        lambda path=None: path or tmp_path / "icon.png",
-    )
-    (tmp_path / "icon.png").touch()
-    monkeypatch.setattr("clipponyai.install._linux_icon_path", lambda: tmp_path / "icon.png")
-
+    _mock_icon(monkeypatch, tmp_path)
     from clipponyai.install import desktop_status, install_desktop
 
     assert "not installed" in desktop_status()
@@ -212,9 +282,7 @@ def test_linux_desktop_status(monkeypatch, tmp_path, fake_home):
 def test_linux_autostart_desktop_entry_valid(monkeypatch, tmp_path, fake_home):
     """The .desktop file written for autostart has proper structure."""
     _patch_linux(monkeypatch, tmp_path, fake_home)
-    monkeypatch.setattr("clipponyai.install._linux_icon_path", lambda: tmp_path / "icon.png")
-    (tmp_path / "icon.png").touch()
-
+    _mock_icon(monkeypatch, tmp_path)
     from clipponyai.install import enable_autostart, _linux_autostart_path
 
     enable_autostart()
@@ -500,6 +568,7 @@ def test_cli_autostart_status(monkeypatch, tmp_path, fake_home, capsys):
 
 def test_cli_autostart_enable(monkeypatch, tmp_path, fake_home, capsys):
     _patch_linux(monkeypatch, tmp_path, fake_home)
+    _mock_icon(monkeypatch, tmp_path)
     from clipponyai.cli import main
 
     code = main(["autostart", "enable"])
@@ -510,6 +579,7 @@ def test_cli_autostart_enable(monkeypatch, tmp_path, fake_home, capsys):
 
 def test_cli_autostart_disable(monkeypatch, tmp_path, fake_home, capsys):
     _patch_linux(monkeypatch, tmp_path, fake_home)
+    _mock_icon(monkeypatch, tmp_path)
     from clipponyai.cli import main
 
     # enable first
@@ -533,13 +603,7 @@ def test_cli_autostart_default_is_status(monkeypatch, tmp_path, fake_home, capsy
 
 def test_cli_install_desktop_linux(monkeypatch, tmp_path, fake_home, capsys):
     _patch_linux(monkeypatch, tmp_path, fake_home)
-    monkeypatch.setattr(
-        "clipponyai.install.generate_icon_png",
-        lambda path=None: path or tmp_path / "icon.png",
-    )
-    (tmp_path / "icon.png").touch()
-    monkeypatch.setattr("clipponyai.install._linux_icon_path", lambda: tmp_path / "icon.png")
-
+    _mock_icon(monkeypatch, tmp_path)
     from clipponyai.cli import main
 
     code = main(["install-desktop"])
@@ -626,3 +690,59 @@ def test_ensure_icon_generates_when_missing(monkeypatch, tmp_path, fake_home):
     msg = ensure_icon()
     assert "generated icon" in msg
     assert len(generated) == 1
+
+
+# ── full install/uninstall ─────────────────────────────────────────────
+
+
+def test_full_install_linux(monkeypatch, tmp_path, fake_home):
+    """full_install runs icon + desktop + autostart on Linux."""
+    _patch_linux(monkeypatch, tmp_path, fake_home)
+    _mock_icon(monkeypatch, tmp_path)
+    from clipponyai.install import full_install
+
+    msgs = full_install()
+    assert len(msgs) == 3
+    # First message is icon status
+    assert "already present" in msgs[0] or "generated icon" in msgs[0]
+    # Second is desktop entry
+    assert "desktop entry" in msgs[1]
+    # Third is autostart
+    assert "autostart" in msgs[2]
+
+
+def test_full_uninstall_linux(monkeypatch, tmp_path, fake_home):
+    """full_uninstall removes desktop + autostart on Linux."""
+    _patch_linux(monkeypatch, tmp_path, fake_home)
+    _mock_icon(monkeypatch, tmp_path)
+    from clipponyai.install import full_install, full_uninstall
+
+    full_install()
+    msgs = full_uninstall()
+    assert len(msgs) == 2
+    assert "removed" in msgs[0]
+    assert "removed" in msgs[1]
+
+
+# ── offscreen integration test (requires QT_QPA_PLATFORM=offscreen) ────
+
+
+@pytest.mark.skipif(
+    os.environ.get("QT_QPA_PLATFORM") != "offscreen",
+    reason="requires QT_QPA_PLATFORM=offscreen",
+)
+def test_generate_icon_png_offscreen_integration(monkeypatch, tmp_path, fake_home):
+    """Real generate_icon_png produces a non-empty PNG via offscreen Qt."""
+    _patch_linux(monkeypatch, tmp_path, fake_home)
+    icon_path = tmp_path / "integration_icon.png"
+    monkeypatch.setattr("clipponyai.install._linux_icon_path", lambda: icon_path)
+
+    from clipponyai.install import generate_icon_png
+
+    result = generate_icon_png(icon_path)
+    assert result == icon_path
+    assert icon_path.exists()
+    # PNG header + some content (a 64x64 RGBA image is several KB)
+    data = icon_path.read_bytes()
+    assert len(data) > 8  # more than just a PNG signature
+    assert data[:4] == b"\x89PNG"  # valid PNG magic

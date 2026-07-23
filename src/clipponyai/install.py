@@ -177,15 +177,23 @@ def _macos_plist_bytes(data_directory: Path | None = None) -> bytes:
 def enable_autostart() -> str:
     """Enable user-level autostart for the current platform.
 
+    On Linux, ensures the app icon is generated before writing the
+    .desktop file so the Icon= line is valid.
+
     Returns a human-readable status message.
     """
     if _is_linux():
+        # Ensure icon exists before referencing it from the .desktop file
+        try:
+            icon_msg = ensure_icon()
+        except Exception as e:
+            return f"failed to generate icon: {e}"
         path = _linux_autostart_path()
         content = _linux_desktop_entry()
         written = _idempotent_write(path, content)
         if written:
-            return f"installed autostart: {path}"
-        return f"autostart already present: {path}"
+            return f"{icon_msg}; installed autostart: {path}"
+        return f"{icon_msg}; autostart already present: {path}"
     if _is_macos():
         # Ensure the data directory (parent of log paths) exists so the
         # launchd process can write stdout/stderr without failing.
@@ -243,8 +251,9 @@ def autostart_status() -> str:
 def install_desktop() -> str:
     """Install a desktop entry (Linux) or explain app launch (macOS).
 
-    On Linux, writes a .desktop file to the user applications directory
-    so the app shows in the application menu.
+    On Linux, ensures the app icon is generated, then writes a .desktop
+    file to the user applications directory so the app shows in the
+    application menu.
 
     On macOS, explains that app launch is handled by the LaunchAgent and
     does not create a separate launcher.
@@ -252,12 +261,17 @@ def install_desktop() -> str:
     Returns a human-readable status message.
     """
     if _is_linux():
+        # Ensure icon exists before referencing it from the .desktop file
+        try:
+            icon_msg = ensure_icon()
+        except Exception as e:
+            return f"failed to generate icon: {e}"
         path = _linux_desktop_path()
         content = _linux_desktop_entry()
         written = _idempotent_write(path, content)
         if written:
-            return f"installed desktop entry: {path}"
-        return f"desktop entry already present: {path}"
+            return f"{icon_msg}; installed desktop entry: {path}"
+        return f"{icon_msg}; desktop entry already present: {path}"
     if _is_macos():
         return (
             "macOS uses LaunchAgents for app launch.  "

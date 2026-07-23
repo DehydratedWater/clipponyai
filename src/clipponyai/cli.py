@@ -1,15 +1,15 @@
 """Command line: run the pony, set things up, check your setup.
 
-    clipponyai              run the desktop pony (fetches sprites on first run)
-    clipponyai --headless   run without GUI (telegram + reminders only)
-    clipponyai init         write a default config.yaml and show its path
-    clipponyai fetch-sprites  download Desktop Ponies sprites now
-    clipponyai tasks        print the current task overview
-    clipponyai doctor       check config, provider keys, sprites, extras,
-                            work-hours, logwatch, autostart, permissions
-    clipponyai check-llm    smoke-test the active LLM provider (returns 0/1)
-    clipponyai autostart    enable/disable/check login autostart
-    clipponyai install-desktop  install .desktop entry (Linux) / explain (macOS)
+clipponyai              run the desktop pony (fetches sprites on first run)
+clipponyai --headless   run without GUI (telegram + reminders only)
+clipponyai init         write a default config.yaml and show its path
+clipponyai fetch-sprites  download Desktop Ponies sprites now
+clipponyai tasks        print the current task overview
+clipponyai doctor       check config, provider keys, sprites, extras,
+                        work-hours, logwatch, autostart, permissions
+clipponyai check-llm    smoke-test the active LLM provider (returns 0/1)
+clipponyai autostart    enable/disable/check login autostart
+clipponyai install-desktop  install .desktop entry (Linux) / explain (macOS)
 """
 
 from __future__ import annotations
@@ -82,24 +82,31 @@ def _cmd_doctor(_args) -> int:
         provider = config.llm.providers[active]
         missing = missing_api_key(provider)
         check(
-            f"api key ({provider.api_key_env or 'not needed'})", missing is None,
+            f"api key ({provider.api_key_env or 'not needed'})",
+            missing is None,
             f"export {missing}=…",
         )
-        check(f"models: fast={provider.fast_model} slow={provider.resolved_slow_model()} "
-              f"vision={provider.resolved_vision_model()}", True)
+        check(
+            f"models: fast={provider.fast_model} slow={provider.resolved_slow_model()} "
+            f"vision={provider.resolved_vision_model()}",
+            True,
+        )
         # Local-provider health-check suggestion
         if provider.base_url and not provider.api_key_env:
             print(f"  (local endpoint {provider.base_url} — run `clipponyai check-llm` to verify)")
     from .sprite_fetch import have_sprites
+
     check(f"sprites: {sprites_dir()}", have_sprites(), "run `clipponyai fetch-sprites`")
     try:
         import PySide6  # noqa: F401
+
         check("PySide6 (desktop pony)", True)
     except ImportError:
         check("PySide6 (desktop pony)", False, "pip install PySide6 (or run --headless)")
     if config.telegram.enabled:
         try:
             import telegram  # noqa: F401
+
             has_lib = True
         except ImportError:
             has_lib = False
@@ -109,24 +116,32 @@ def _cmd_doctor(_args) -> int:
             bool(os.environ.get(config.telegram.token_env)),
             f"export {config.telegram.token_env}=… (from @BotFather)",
         )
-        check("telegram allowlist", bool(config.telegram.allowed_user_ids),
-              "add your user id to telegram.allowed_user_ids or the bot answers nobody")
-    check(f"screen peeking: {'ON' if config.screenshot_enabled else 'off (private by default)'}",
-          True)
+        check(
+            "telegram allowlist",
+            bool(config.telegram.allowed_user_ids),
+            "add your user id to telegram.allowed_user_ids or the bot answers nobody",
+        )
+    check(
+        f"screen peeking: {'ON' if config.screenshot_enabled else 'off (private by default)'}", True
+    )
 
     # Work-hours state
     wh = config.reminders.work_hours
     if wh.enabled:
         days = {0: "Mon", 1: "Tue", 2: "Wed", 3: "Thu", 4: "Fri", 5: "Sat", 6: "Sun"}
         day_names = ", ".join(days[d] for d in wh.weekdays)
-        print(f"  work hours: {wh.start}–{wh.end} ({day_names}), closing nudge={'on' if wh.closing_nudge else 'off'}")
+        print(
+            f"  work hours: {wh.start}–{wh.end} ({day_names}), closing nudge={'on' if wh.closing_nudge else 'off'}"
+        )
     else:
         print("  work hours: disabled")
 
     # Logwatch privacy/paths
     lw = config.logwatch
     if lw.enabled:
-        print(f"  logwatch: enabled ({len(lw.files)} file(s), {lw.max_lines_per_file} lines/file, {lw.max_total_chars} chars total)")
+        print(
+            f"  logwatch: enabled ({len(lw.files)} file(s), {lw.max_lines_per_file} lines/file, {lw.max_total_chars} chars total)"
+        )
         for f in lw.files:
             exists = Path(f).exists()
             mark = "✓" if exists else "?"
@@ -136,16 +151,25 @@ def _cmd_doctor(_args) -> int:
 
     # Autostart status
     from .install import autostart_status
+
     print(f"  autostart: {autostart_status()}")
 
     # Platform-specific screen permission guidance
     sys_name = _platform.system()
     if sys_name == "Darwin" and config.screenshot_enabled:
-        print("  macOS screen recording: grant permission in System Settings → Privacy & Security → Screen Recording")
-        print("  macOS accessibility (cursor chase): grant in System Settings → Privacy & Security → Accessibility")
+        print(
+            "  macOS screen recording: grant permission in System Settings → Privacy & Security → Screen Recording"
+        )
+        print(
+            "  macOS accessibility (cursor chase): grant in System Settings → Privacy & Security → Accessibility"
+        )
     elif sys_name == "Darwin":
-        print("  macOS note: when you enable screen peeking, you will need to grant Screen Recording permission")
-        print("  and Accessibility permission for cursor chasing in System Settings → Privacy & Security")
+        print(
+            "  macOS note: when you enable screen peeking, you will need to grant Screen Recording permission"
+        )
+        print(
+            "  and Accessibility permission for cursor chasing in System Settings → Privacy & Security"
+        )
 
     # Vision model limitation for text-only local models
     if known:
@@ -153,20 +177,26 @@ def _cmd_doctor(_args) -> int:
         # Local providers without a dedicated vision model use the text model for vision
         if provider.base_url and not provider.api_key_env:
             if not provider.vision_model:
-                print(f"  vision model: {vision_model} (text-only local model — screenshots will be text-prompted, not image-understood)")
+                print(
+                    f"  vision model: {vision_model} (text-only local model — screenshots will be text-prompted, not image-understood)"
+                )
 
     # Proactive focus awareness status
     aw = config.awareness
     awareness_active = aw.enabled and config.screenshot_enabled
     if awareness_active:
-        print(f"  awareness: on (interval={aw.interval_seconds}s, cooldown={aw.cooldown_minutes}m, confidence={aw.minimum_confidence})")
+        print(
+            f"  awareness: on (interval={aw.interval_seconds}s, cooldown={aw.cooldown_minutes}m, confidence={aw.minimum_confidence})"
+        )
         # Warn if the active vision model is a known text-only model
         if known:
             _vision = provider.resolved_vision_model()
             _fast = provider.fast_model
             if _vision == _fast and provider.base_url and not provider.api_key_env:
                 print("  awareness: WARNING — active vision model is text-only (" + _vision + ")")
-                print("  awareness:   screen classification will not work; set a vision-capable model")
+                print(
+                    "  awareness:   screen classification will not work; set a vision-capable model"
+                )
     elif aw.enabled:
         print("  awareness: enabled but screenshot gate is off (screenshot_enabled=False)")
     else:
@@ -192,11 +222,15 @@ def _cmd_autostart(args) -> int:
 
     if args.action == "enable":
         msg = enable_autostart()
+        # enable_autostart may return multiple semicolon-separated messages
+        for line in msg.split("; "):
+            print(line.strip())
     elif args.action == "disable":
         msg = disable_autostart()
+        print(msg)
     else:
         msg = autostart_status()
-    print(msg)
+        print(msg)
     return 0
 
 
@@ -204,7 +238,9 @@ def _cmd_install_desktop(_args) -> int:
     from .install import install_desktop
 
     msg = install_desktop()
-    print(msg)
+    # install_desktop may return multiple semicolon-separated messages
+    for line in msg.split("; "):
+        print(line.strip())
     return 0
 
 
@@ -244,7 +280,10 @@ def _cmd_check_llm(_args) -> int:
     client = OpenAICompatClient.from_spec(spec)
     try:
         result = run_interactive(
-            spec, "Say ok in one word.", client=client, max_tool_rounds=0,
+            spec,
+            "Say ok in one word.",
+            client=client,
+            max_tool_rounds=0,
         )
         if result.error:
             print(f"ERROR: {result.error}")
@@ -272,15 +311,18 @@ def _cmd_run(args) -> int:
 
     if args.headless:
         from .app import run_headless
+
         asyncio.run(run_headless(config))
         return 0
 
     from .sprite_fetch import fetch_sprites, have_sprites
+
     if not have_sprites():
         print("first run — downloading Desktop Ponies sprites (CC BY-NC-SA, personal use)…")
         fetch_sprites()
 
     from .app import run_gui
+
     return run_gui(config)
 
 
@@ -294,8 +336,7 @@ def main(argv: list[str] | None = None) -> int:
 
     run_parser = sub.add_parser("run", help="run the assistant (default)")
     for p in (parser, run_parser):
-        p.add_argument("--headless", action="store_true",
-                       help="no GUI: telegram + reminders only")
+        p.add_argument("--headless", action="store_true", help="no GUI: telegram + reminders only")
         p.add_argument("-v", "--verbose", action="store_true")
     sub.add_parser("init", help="write a default config.yaml")
     sub.add_parser("fetch-sprites", help="download Desktop Ponies sprites")
@@ -306,7 +347,9 @@ def main(argv: list[str] | None = None) -> int:
     # autostart subcommand
     auto_parser = sub.add_parser("autostart", help="enable/disable/check autostart")
     auto_parser.add_argument(
-        "action", nargs="?", default="status",
+        "action",
+        nargs="?",
+        default="status",
         choices=["enable", "disable", "status"],
         help="action (default: status)",
     )
@@ -315,10 +358,15 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     commands = {
-        None: _cmd_run, "run": _cmd_run, "init": _cmd_init,
-        "fetch-sprites": _cmd_fetch_sprites, "tasks": _cmd_tasks,
-        "doctor": _cmd_doctor, "check-llm": _cmd_check_llm,
-        "autostart": _cmd_autostart, "install-desktop": _cmd_install_desktop,
+        None: _cmd_run,
+        "run": _cmd_run,
+        "init": _cmd_init,
+        "fetch-sprites": _cmd_fetch_sprites,
+        "tasks": _cmd_tasks,
+        "doctor": _cmd_doctor,
+        "check-llm": _cmd_check_llm,
+        "autostart": _cmd_autostart,
+        "install-desktop": _cmd_install_desktop,
     }
     return commands[args.command](args)
 
