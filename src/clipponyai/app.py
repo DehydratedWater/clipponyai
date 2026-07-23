@@ -140,6 +140,32 @@ async def run_headless(config: Config) -> None:
         await core.stop()
 
 
+# ── settings dialog helper ───────────────────────────────────────────
+def _open_settings(pony, config: Config) -> None:
+    from PySide6.QtWidgets import QDialog
+
+    from .install import autostart_status, disable_autostart, enable_autostart
+    from .settings_dialog import SettingsDialog
+
+    auto_status = autostart_status()
+    auto_on = "enabled" in auto_status.lower() or "installed" in auto_status.lower()
+
+    dialog = SettingsDialog(
+        config,
+        available_providers=sorted(config.llm.providers),
+        enable_autostart_fn=enable_autostart,
+        disable_autostart_fn=disable_autostart,
+        parent=pony,
+    )
+    dialog.form.autostart_enabled = auto_on
+    dialog._original.autostart_enabled = auto_on  # type: ignore[attr-defined]
+    result = dialog.exec()
+    if result == QDialog.Accepted:
+        pony.say("settings saved!", msec=4000)
+        # apply live-safe changes
+        pony.screenshot_enabled = config.screenshot_enabled
+
+
 # ── Qt shell ──────────────────────────────────────────────────────────
 def run_gui(config: Config) -> int:
     import qasync
@@ -240,9 +266,7 @@ def run_gui(config: Config) -> int:
     pony.provider_selected.connect(on_provider)
     pony.screenshot_toggled.connect(on_peek)
     pony.tasks_requested.connect(lambda: (pony.say(core.overview(), msec=20000)))
-    pony.settings_requested.connect(
-        lambda: pony.say(f"my settings live in\n`{config_path()}`\n"
-                         f"edit + restart me 💜", msec=10000))
+    pony.settings_requested.connect(lambda: _open_settings(pony, config))
     pony.hide_requested.connect(pony.hide)
 
     def quit_app() -> None:
