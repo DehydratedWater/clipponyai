@@ -88,11 +88,30 @@ def test_send_before_start_is_noop(tmp_path):
 
 # ── markdown helper ───────────────────────────────────────────────────
 def test_md_to_html_escapes_and_formats():
-    html = md_to_html("**bold** *it* `code` <script> https://x.example\n- item")
+    html = md_to_html("**bold** *it* `code` <script> https://x.example\n\n- item")
     assert "<b>bold</b>" in html and "<i>it</i>" in html and "<code>code</code>" in html
     assert "&lt;script&gt;" in html
     assert '<a href="https://x.example"' in html
-    assert "• item" in html
+    assert "<li>item</li>" in html  # real list (blank line separates it)
+
+
+def test_md_balances_orphaned_emote_asterisk():
+    """A stray action-emote opener (common LLM output) renders as emphasis."""
+    html = md_to_html("*Giggles and trots\n\nHi there!")
+    assert "*Giggles" not in html  # no literal asterisk leaked
+    assert "<i>Giggles and trots</i>" in html
+
+
+def test_md_leaves_balanced_emotes_and_bullets_alone():
+    html = md_to_html("*fine* and *also fine*\n\n- bullet")
+    assert html.count("<i>") == 2
+    assert "<li>bullet</li>" in html
+
+
+def test_md_code_block_preserves_newlines():
+    html = md_to_html("```\ndef hi():\n    pass\n```")
+    assert "<pre><code>" in html
+    assert "<br>" not in html  # no stray <br> injected inside the code block
 
 
 # ── headless core wiring ──────────────────────────────────────────────

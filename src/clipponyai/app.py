@@ -259,11 +259,38 @@ def run_gui(config: Config) -> int:
     core.nudge_hooks.append(nudge_gui)
 
     # ── menu wiring ──────────────────────────────────────────────────
+    def place_chat_near_pony() -> None:
+        """Anchor the chat window to the pony, staying fully on one screen."""
+        from PySide6.QtCore import QPoint
+        from PySide6.QtWidgets import QApplication
+
+        margin = 16
+        pony_pos = pony.pos()
+        pony_right = pony_pos.x() + pony.width()
+        pony_bottom = pony_pos.y() + pony.height()
+
+        screen = QApplication.screenAt(pony_pos) or QApplication.primaryScreen()
+        area = screen.availableGeometry()
+
+        # Prefer to the right of the pony; fall back to the left if it won't fit.
+        x = pony_right + margin
+        if x + chat.width() > area.right():
+            x = pony_pos.x() - chat.width() - margin
+        # Prefer below the pony; fall back to above if it would run off the bottom.
+        y = pony_bottom + margin
+        if y + chat.height() > area.bottom():
+            y = pony_pos.y() - chat.height() - margin
+        # Clamp into the usable area so the window can never end up off-screen.
+        x = max(area.left(), min(x, area.right() - chat.width()))
+        y = max(area.top(), min(y, area.bottom() - chat.height()))
+        chat.move(QPoint(x, y))
+
     def toggle_chat() -> None:
         if chat.isVisible():
             chat.hide()
         else:
             chat.load_history(core.store.recent_messages(60))
+            place_chat_near_pony()
             chat.show()
             chat.input.setFocus()
 
@@ -290,15 +317,48 @@ def run_gui(config: Config) -> int:
     pony.screenshot_toggled.connect(on_peek)
     pony.tasks_requested.connect(lambda: (pony.say(core.overview(), msec=20000)))
     pony.settings_requested.connect(lambda: _open_settings(pony, core, config))
-    pony.hide_requested.connect(pony.hide)
+    pony.hide_requested.connect(lambda: toggle_pony())
+
+    def toggle_pony() -> None:
+        """Show or hide the pony — always recoverable via tray or menu."""
+        if pony.isVisible():
+            pony.hide()
+        else:
+            pony.show()
+            pony.raise_()
 
     def quit_app() -> None:
         async def _shutdown() -> None:
             await core.stop()
+            tray.hide()
             app.quit()
         asyncio.ensure_future(_shutdown())
 
     pony.quit_requested.connect(quit_app)
+
+    # ── system tray: a persistent handle even when the pony is hidden ──
+    from PySide6.QtWidgets import QMenu, QSystemTrayIcon
+
+    tray = QSystemTrayIcon(app_icon(), app)
+    tray.setToolTip("clipponyai")
+    tray_menu = QMenu()
+    act_show = tray_menu.addAction("🦄 show / hide pony")
+    act_show.triggered.connect(toggle_pony)
+    tray_menu.addAction("💬 chat", toggle_chat)
+    tray_menu.addAction("📋 tasks", lambda: pony.say(core.overview(), msec=20000))
+    tray_menu.addAction("⚙ settings", lambda: _open_settings(pony, core, config))
+    tray_menu.addSeparator()
+    tray_menu.addAction("✖ quit", quit_app)
+    tray.setContextMenu(tray_menu)
+    # left-click on the tray also brings the pony back
+    tray.activated.connect(
+        lambda reason: toggle_pony() if reason == QSystemTrayIcon.Trigger else None
+    )
+    if QSystemTrayIcon.isSystemTrayAvailable():
+        tray.show()
+    else:
+        log.warning("no system tray detected; hiding the pony is still reversible "
+                    "by clicking the tray area if one appears later")
 
     pony.show()
     with loop:
