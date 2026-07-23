@@ -51,6 +51,11 @@ class TestReadForm:
         assert form.logwatch_max_chars == 8000
         assert form.active_provider == "openai"
         assert form.autostart_enabled is False
+        assert form.awareness_enabled is False
+        assert form.awareness_interval_seconds == 120
+        assert form.awareness_cooldown_minutes == 30
+        assert form.awareness_minimum_confidence == 0.7
+        assert "social media" in form.awareness_focus_policy
 
     def test_custom_values_roundtrip(self):
         config = Config()
@@ -78,6 +83,11 @@ class TestReadForm:
         config.logwatch.max_lines_per_file = 500
         config.logwatch.max_total_chars = 15000
         config.llm.active = "ollama"
+        config.awareness.enabled = True
+        config.awareness.interval_seconds = 60
+        config.awareness.cooldown_minutes = 60
+        config.awareness.minimum_confidence = 0.5
+        config.awareness.focus_policy = "custom policy"
 
         form = read_form(config)
         assert form.screenshot_enabled is True
@@ -104,6 +114,11 @@ class TestReadForm:
         assert form.logwatch_max_lines == 500
         assert form.logwatch_max_chars == 15000
         assert form.active_provider == "ollama"
+        assert form.awareness_enabled is True
+        assert form.awareness_interval_seconds == 60
+        assert form.awareness_cooldown_minutes == 60
+        assert form.awareness_minimum_confidence == 0.5
+        assert form.awareness_focus_policy == "custom policy"
 
     def test_autostart_flag_passed_through(self):
         config = Config()
@@ -166,6 +181,11 @@ class TestApplyToConfig:
         config.logwatch.max_lines_per_file = 300
         config.logwatch.max_total_chars = 12000
         config.llm.active = "anthropic"
+        config.awareness.enabled = True
+        config.awareness.interval_seconds = 90
+        config.awareness.cooldown_minutes = 45
+        config.awareness.minimum_confidence = 0.8
+        config.awareness.focus_policy = "awareness policy"
 
         form = read_form(config)
         apply_to_config(form, config)
@@ -194,6 +214,11 @@ class TestApplyToConfig:
         assert config.logwatch.max_lines_per_file == 300
         assert config.logwatch.max_total_chars == 12000
         assert config.llm.active == "anthropic"
+        assert config.awareness.enabled is True
+        assert config.awareness.interval_seconds == 90
+        assert config.awareness.cooldown_minutes == 45
+        assert config.awareness.minimum_confidence == 0.8
+        assert config.awareness.focus_policy == "awareness policy"
 
     def test_work_hours_weekdays_deduped(self):
         config = Config()
@@ -588,6 +613,11 @@ class TestFullRoundTrip:
         config.logwatch.max_lines_per_file = 500
         config.logwatch.max_total_chars = 15000
         config.llm.active = "anthropic"
+        config.awareness.enabled = True
+        config.awareness.interval_seconds = 180
+        config.awareness.cooldown_minutes = 60
+        config.awareness.minimum_confidence = 0.85
+        config.awareness.focus_policy = "never interrupt on Monday"
 
         path = tmp_path / "config.yaml"
         config.save(path)

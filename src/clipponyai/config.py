@@ -217,12 +217,58 @@ class UIConfig(BaseModel):
     attention_seconds: int = 30  # how long a reminder chases the cursor
 
 
+class AwarenessConfig(BaseModel):
+    """Proactive focus/distraction awareness — privacy off by default.
+
+    When both screenshot_enabled AND awareness.enabled are True, the monitor
+    periodically classifies the screen via the LLM's VISION lane and can
+    interrupt the user for distractions (TikTok during work hours) or
+    after-hours work.  Natural-language focus_policy is editable by the user.
+    """
+
+    enabled: bool = False
+    interval_seconds: int = 120
+    cooldown_minutes: int = 30
+    minimum_confidence: float = 0.7
+    focus_policy: str = (
+        "During work hours, interrupt if the user is on social media "
+        "(TikTok, Instagram, Twitter/X, Reddit browsing, YouTube entertainment). "
+        "After work hours, gently remind if the user appears to still be working."
+    )
+
+    @field_validator("interval_seconds")
+    @classmethod
+    def _interval_range(cls, v: int) -> int:
+        if v < 30:
+            raise ValueError("interval must be at least 30 seconds")
+        if v > 3600:
+            raise ValueError("interval must be at most 3600 seconds")
+        return v
+
+    @field_validator("cooldown_minutes")
+    @classmethod
+    def _cooldown_range(cls, v: int) -> int:
+        if v < 5:
+            raise ValueError("cooldown must be at least 5 minutes")
+        if v > 480:
+            raise ValueError("cooldown must be at most 480 minutes (8 hours)")
+        return v
+
+    @field_validator("minimum_confidence")
+    @classmethod
+    def _confidence_range(cls, v: float) -> float:
+        if not (0.0 <= v <= 1.0):
+            raise ValueError("confidence must be between 0.0 and 1.0")
+        return v
+
+
 class Config(BaseModel):
     ui: UIConfig = Field(default_factory=UIConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
     reminders: RemindersConfig = Field(default_factory=RemindersConfig)
     telegram: TelegramConfig = Field(default_factory=TelegramConfig)
     logwatch: LogWatchConfig = Field(default_factory=LogWatchConfig)
+    awareness: AwarenessConfig = Field(default_factory=AwarenessConfig)
     # privacy: the pony can only look at your screen when you turn this on
     screenshot_enabled: bool = False
     # scan your messages for passing promises ("I'll call mom later") and

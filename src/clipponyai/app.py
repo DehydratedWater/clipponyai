@@ -11,6 +11,7 @@ import asyncio
 import logging
 from typing import Awaitable, Callable
 
+from .awareness import AwarenessMonitor, PonyBrainAssessor
 from .brain import PonyBrain
 from .channels import Channel
 from .characters import get_character
@@ -39,6 +40,9 @@ class Core:
         self.scheduler = ReminderScheduler(
             self.store, config.reminders, self._deliver_nudge,
             work_hours=config.reminders.work_hours,
+        )
+        self.awareness_monitor = AwarenessMonitor(
+            config, screenshot_fn, self._make_assessor(), self.store, self._deliver_nudge,
         )
         self.channels: list[Channel] = []
         self.observers: list[Observer] = []      # GUI mirrors exchanges live
@@ -73,6 +77,14 @@ class Core:
     def set_screenshot_enabled(self, on: bool) -> None:
         self.config.screenshot_enabled = on
         self.config.save()
+        try:
+            asyncio.get_running_loop().create_task(self.awareness_monitor.refresh())
+        except RuntimeError:
+            # Configuration can also be changed before the app event loop starts.
+            pass
+
+    def _make_assessor(self) -> "PonyBrainAssessor":
+        return PonyBrainAssessor(self.brain)
 
     # ── reminders ────────────────────────────────────────────────────
     async def _deliver_nudge(self, message: str) -> None:
@@ -108,9 +120,11 @@ class Core:
             except RuntimeError as e:
                 log.error("telegram channel not started: %s", e)
         self._tasks.append(asyncio.create_task(self.scheduler.run()))
+        await self.awareness_monitor.start()
 
     async def stop(self) -> None:
         self.scheduler.stop()
+        await self.awareness_monitor.stop()
         for task in self._tasks:
             task.cancel()
         for channel in self.channels:
@@ -141,7 +155,7 @@ async def run_headless(config: Config) -> None:
 
 
 # ── settings dialog helper ───────────────────────────────────────────
-def _open_settings(pony, config: Config) -> None:
+def _open_settings(pony, core: Core, config: Config) -> None:
     from PySide6.QtWidgets import QDialog
 
     from .install import autostart_status, disable_autostart, enable_autostart
@@ -164,6 +178,7 @@ def _open_settings(pony, config: Config) -> None:
         # apply live-safe changes
         pony.screenshot_enabled = config.screenshot_enabled
         pony.set_idle_wander(config.ui.idle_wander)
+        asyncio.get_running_loop().create_task(core.awareness_monitor.refresh())
 
 
 # ── Qt shell ──────────────────────────────────────────────────────────
@@ -266,7 +281,7 @@ def run_gui(config: Config) -> int:
     pony.provider_selected.connect(on_provider)
     pony.screenshot_toggled.connect(on_peek)
     pony.tasks_requested.connect(lambda: (pony.say(core.overview(), msec=20000)))
-    pony.settings_requested.connect(lambda: _open_settings(pony, config))
+    pony.settings_requested.connect(lambda: _open_settings(pony, core, config))
     pony.hide_requested.connect(pony.hide)
 
     def quit_app() -> None:

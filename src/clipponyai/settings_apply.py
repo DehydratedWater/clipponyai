@@ -80,6 +80,13 @@ class SettingsForm:
     # autostart
     autostart_enabled: bool = False
 
+    # awareness (proactive focus/distraction)
+    awareness_enabled: bool = False
+    awareness_interval_seconds: int = 120
+    awareness_cooldown_minutes: int = 30
+    awareness_minimum_confidence: float = 0.7
+    awareness_focus_policy: str = ""
+
 
 # ── read from Config ───────────────────────────────────────────────────
 
@@ -92,6 +99,7 @@ def read_form(config: Config, *, autostart_enabled: bool = False) -> SettingsFor
     rem = config.reminders
     wh = rem.work_hours
     lw = config.logwatch
+    aw = config.awareness
     return SettingsForm(
         screenshot_enabled=config.screenshot_enabled,
         auto_track_commitments=config.auto_track_commitments,
@@ -118,6 +126,11 @@ def read_form(config: Config, *, autostart_enabled: bool = False) -> SettingsFor
         logwatch_max_chars=lw.max_total_chars,
         active_provider=config.llm.active,
         autostart_enabled=autostart_enabled,
+        awareness_enabled=aw.enabled,
+        awareness_interval_seconds=aw.interval_seconds,
+        awareness_cooldown_minutes=aw.cooldown_minutes,
+        awareness_minimum_confidence=aw.minimum_confidence,
+        awareness_focus_policy=aw.focus_policy,
     )
 
 
@@ -207,6 +220,18 @@ def validate(form: SettingsForm, *, available_providers: list[str],
     if form.character and form.character not in ch:
         errors.append(f"Character {form.character!r} is not available")
 
+    # awareness
+    if form.awareness_interval_seconds < 30:
+        errors.append("Awareness interval must be at least 30 seconds")
+    if form.awareness_interval_seconds > 3600:
+        errors.append("Awareness interval must be at most 3600 seconds")
+    if form.awareness_cooldown_minutes < 5:
+        errors.append("Awareness cooldown must be at least 5 minutes")
+    if form.awareness_cooldown_minutes > 480:
+        errors.append("Awareness cooldown must be at most 480 minutes")
+    if not (0.0 <= form.awareness_minimum_confidence <= 1.0):
+        errors.append("Awareness confidence must be between 0.0 and 1.0")
+
     return errors
 
 
@@ -249,6 +274,13 @@ def apply_to_config(form: SettingsForm, config: Config) -> None:
     lw.max_total_chars = form.logwatch_max_chars
 
     config.llm.active = form.active_provider
+
+    aw = config.awareness
+    aw.enabled = form.awareness_enabled
+    aw.interval_seconds = form.awareness_interval_seconds
+    aw.cooldown_minutes = form.awareness_cooldown_minutes
+    aw.minimum_confidence = form.awareness_minimum_confidence
+    aw.focus_policy = form.awareness_focus_policy
 
 
 def detect_changes(old: SettingsForm, new: SettingsForm) -> dict[str, bool]:

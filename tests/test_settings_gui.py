@@ -23,8 +23,9 @@ def test_settings_dialog_constructs_with_every_tab():
     )
 
     assert dialog.windowTitle() == "Settings"
-    assert dialog._tabs.count() == 7
+    assert dialog._tabs.count() == 8
     assert dialog._tabs.tabText(4) == "Log Watch"
+    assert dialog._tabs.tabText(5) == "Awareness"
 
     dialog.close()
     app.processEvents()

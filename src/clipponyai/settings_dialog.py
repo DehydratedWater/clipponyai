@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QListWidget,
+    QPlainTextEdit,
     QSpinBox,
     QTabWidget,
     QVBoxLayout,
@@ -487,6 +488,81 @@ def _build_misc_tab(form: SettingsForm) -> QWidget:
     return page
 
 
+def _build_awareness_tab(form: SettingsForm) -> QWidget:
+    page = QWidget()
+    lay = QVBoxLayout(page)
+    lay.setContentsMargins(8, 8, 8, 8)
+
+    # Privacy warning banner
+    warning = QLabel(
+        "\u26a0\ufe0f Privacy: This feature periodically sends screenshots to your LLM "
+        "to detect distractions. Both screen peeking AND awareness must be enabled "
+        "in settings for this to work."
+    )
+    warning.setObjectName("restartBanner")  # reuse the yellow banner style
+    lay.addWidget(warning)
+
+    box = QGroupBox("Proactive Focus Awareness")
+    fl = QFormLayout()
+
+    chk_enabled = QCheckBox("Enable proactive focus/distraction awareness")
+    chk_enabled.setChecked(form.awareness_enabled)
+
+    interval_spin = QSpinBox()
+    interval_spin.setRange(30, 3600)
+    interval_spin.setSuffix(" s")
+    interval_spin.setValue(form.awareness_interval_seconds)
+
+    cooldown_spin = QSpinBox()
+    cooldown_spin.setRange(5, 480)
+    cooldown_spin.setSuffix(" min")
+    cooldown_spin.setValue(form.awareness_cooldown_minutes)
+
+    conf_spin = QSpinBox()
+    conf_spin.setRange(0, 100)
+    conf_spin.setSuffix("%")
+    conf_spin.setValue(int(form.awareness_minimum_confidence * 100))
+
+    policy_edit = QPlainTextEdit()
+    policy_edit.setPlainText(form.awareness_focus_policy)
+    policy_edit.setFixedHeight(80)
+    policy_edit.setPlaceholderText(
+        "Natural-language policy, e.g. 'During work hours, interrupt on social media.'"
+    )
+
+    err_interval = ErrorLabel()
+    err_cooldown = ErrorLabel()
+    err_confidence = ErrorLabel()
+
+    fl.addRow("", chk_enabled)
+    fl.addRow("Check interval:", interval_spin)
+    fl.addRow("", err_interval)
+    fl.addRow("Cooldown after alert:", cooldown_spin)
+    fl.addRow("", err_cooldown)
+    fl.addRow("Minimum confidence:", conf_spin)
+    fl.addRow("", err_confidence)
+    fl.addRow("Focus policy:", policy_edit)
+    box.setLayout(fl)
+    lay.addWidget(box)
+    lay.addStretch()
+
+    def apply() -> None:
+        form.awareness_enabled = chk_enabled.isChecked()
+        form.awareness_interval_seconds = interval_spin.value()
+        form.awareness_cooldown_minutes = cooldown_spin.value()
+        form.awareness_minimum_confidence = conf_spin.value() / 100.0
+        form.awareness_focus_policy = policy_edit.toPlainText().strip()
+
+    def set_errors(errors: dict[str, str]) -> None:
+        err_interval.set_error(errors.get("awareness_interval"))
+        err_cooldown.set_error(errors.get("awareness_cooldown"))
+        err_confidence.set_error(errors.get("awareness_confidence"))
+
+    page._apply = apply  # type: ignore[attr-defined]
+    page._set_errors = set_errors  # type: ignore[attr-defined]
+    return page
+
+
 # ── main dialog ────────────────────────────────────────────────────────
 
 
@@ -545,6 +621,7 @@ class SettingsDialog(QDialog):
         self._tabs.addTab(_build_reminders_tab(self.form), "Reminders")
         self._tabs.addTab(_build_workhours_tab(self.form), "Work Hours")
         self._tabs.addTab(_build_logwatch_tab(self.form), "Log Watch")
+        self._tabs.addTab(_build_awareness_tab(self.form), "Awareness")
         self._tabs.addTab(_build_llm_tab(self.form, available_providers), "LLM")
         self._tabs.addTab(_build_misc_tab(self.form), "Misc")
         main_lay.addWidget(self._tabs)
@@ -607,6 +684,12 @@ class SettingsDialog(QDialog):
                 mapping["logwatch_bounds"] = err
             elif "provider" in err_lower:
                 mapping["active_provider"] = err
+            elif "awareness" in err_lower and "interval" in err_lower:
+                mapping["awareness_interval"] = err
+            elif "awareness" in err_lower and "cooldown" in err_lower:
+                mapping["awareness_cooldown"] = err
+            elif "awareness" in err_lower and "confidence" in err_lower:
+                mapping["awareness_confidence"] = err
 
         for i in range(self._tabs.count()):
             tab = self._tabs.widget(i)
