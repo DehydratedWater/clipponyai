@@ -44,6 +44,13 @@ from .logwatch import read_recent_logs
 from .providers import FAST, SLOW, VISION, make_live_profile
 from .tasks import TaskStore, content_tokens
 from .timeparse import parse_when as parse_when_offline
+from .token_capture import (
+    TokenCallback,
+    TokenCaptureClient,
+    RawResponseOpenAICompatClient,
+    lane_from_agent_id,
+    purpose_from_agent_id,
+)
 
 log = logging.getLogger("clipponyai.brain")
 
@@ -241,12 +248,14 @@ class PonyBrain:
         screenshot_fn: Callable[[], bytes | None] | None = None,
         log_fn: Callable[[], str] | None = None,
         client_factory: Callable[[Any], Any] | None = None,  # tests inject fakes
+        token_callback: TokenCallback | None = None,
     ) -> None:
         self.config = config
         self.store = store
         self.screenshot_fn = screenshot_fn
         self.log_fn = log_fn
         self.client_factory = client_factory
+        self.token_callback = token_callback
         self.character_slug = config.ui.character
         self.provider_name = config.llm.active
         self._specs: dict[tuple, Any] = {}
@@ -329,7 +338,20 @@ class PonyBrain:
             "max_tool_rounds": max_tool_rounds or self.config.llm.max_tool_rounds,
         }
         if self.client_factory is not None:
-            kwargs["client"] = self.client_factory(spec)
+            raw_client = self.client_factory(spec)
+        else:
+            raw_client = RawResponseOpenAICompatClient.from_spec(spec)
+        # Wrap with token capture if a callback is registered
+        if self.token_callback is not None:
+            raw_client = TokenCaptureClient(
+                raw_client,
+                callback=self.token_callback,
+                lane=lane_from_agent_id(spec.agent_id),
+                purpose=purpose_from_agent_id(spec.agent_id),
+                provider=self.provider_name,
+                model=spec.model_id,
+            )
+        kwargs["client"] = raw_client
         return run_interactive(spec, user_input, **kwargs)
 
     # ── small fast call: time grounding ──────────────────────────────

@@ -35,10 +35,33 @@ class Core:
         self.store = TaskStore(db_path())
         # Accountability stores (routines, goals, activity, …)
         self.accountability = get_stores(self.store)
+        # Wire token-usage callback into the brain
+        token_usage_store = self.accountability["token_usage"]
+
+        def _token_callback(
+            lane: str,
+            purpose: str,
+            provider: str,
+            model: str,
+            prompt_tokens: int,
+            completion_tokens: int,
+            estimated: bool,
+        ) -> None:
+            token_usage_store.record(
+                lane=lane,
+                purpose=purpose,
+                provider=provider,
+                model=model,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                estimated=estimated,
+            )
+
         self.brain = PonyBrain(
             config, self.store, screenshot_fn=screenshot_fn,
             log_fn=lambda: read_recent_logs(config.logwatch),
             client_factory=client_factory,
+            token_callback=_token_callback,
         )
         # Wire RoutineEngine into the scheduler
         routine_engine = self._make_routine_engine()
