@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Awaitable, Callable
+from collections.abc import Awaitable, Callable
 
+from .accountability import get_stores
 from .awareness import AwarenessMonitor, PonyBrainAssessor
 from .brain import PonyBrain
 from .channels import Channel
@@ -32,14 +33,19 @@ class Core:
     def __init__(self, config: Config, *, screenshot_fn=None, client_factory=None) -> None:
         self.config = config
         self.store = TaskStore(db_path())
+        # Accountability stores (routines, goals, activity, …)
+        self.accountability = get_stores(self.store)
         self.brain = PonyBrain(
             config, self.store, screenshot_fn=screenshot_fn,
             log_fn=lambda: read_recent_logs(config.logwatch),
             client_factory=client_factory,
         )
+        # Wire RoutineEngine into the scheduler
+        routine_engine = self._make_routine_engine()
         self.scheduler = ReminderScheduler(
             self.store, config.reminders, self._deliver_nudge,
             work_hours=config.reminders.work_hours,
+            routine_engine=routine_engine,
         )
         self.awareness_monitor = AwarenessMonitor(
             config, screenshot_fn, self._make_assessor(), self.store, self._deliver_nudge,
@@ -83,8 +89,21 @@ class Core:
             # Configuration can also be changed before the app event loop starts.
             pass
 
-    def _make_assessor(self) -> "PonyBrainAssessor":
+    def _make_assessor(self) -> PonyBrainAssessor:
         return PonyBrainAssessor(self.brain)
+
+    def _make_routine_engine(self):
+        """Build the RoutineEngine wired into the scheduler."""
+        from .routines import RoutineEngine as RE
+
+        acct = self.accountability
+        return RE(
+            routine_store=acct["routines"],
+            completion_store=acct["routine_completions"],
+            task_store=self.store,
+            deliver=self._deliver_nudge,
+            activity_store=acct["activity"],
+        )
 
     # ── reminders ────────────────────────────────────────────────────
     async def _deliver_nudge(self, message: str) -> None:

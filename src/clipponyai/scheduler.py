@@ -9,17 +9,26 @@ forever. During quiet hours nothing fires; things queue until morning.
 
 Work-hours add a closing nudge at end-of-day listing real pending tasks,
 fired once per workday (persisted via TaskStore meta table).
+
+Optional RoutineEngine integration: when a RoutineEngine is passed to the
+constructor, its tick runs alongside the ordinary nudge cycle.  Quiet hours
+suppress delivery but allow missed-marking state updates.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, time as dt_time
-from typing import Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from datetime import datetime
+from datetime import time as dt_time
+from typing import TYPE_CHECKING
 
 from .config import RemindersConfig, WorkHoursConfig
 from .tasks import DROP_NOTICE, TaskStore, compose_nudge
+
+if TYPE_CHECKING:
+    from .routines import RoutineEngine
 
 log = logging.getLogger("clipponyai.scheduler")
 
@@ -98,11 +107,13 @@ class ReminderScheduler:
         config: RemindersConfig,
         deliver: Deliver,
         work_hours: WorkHoursConfig | None = None,
+        routine_engine: RoutineEngine | None = None,
     ) -> None:
         self.store = store
         self.config = config
         self.deliver = deliver
         self.work_hours = work_hours or (config.work_hours if hasattr(config, "work_hours") else None)
+        self.routine_engine = routine_engine
         self._stop = asyncio.Event()
 
     async def tick(self, now: datetime | None = None) -> str | None:
@@ -110,13 +121,19 @@ class ReminderScheduler:
         now = now or datetime.now()
         if not self.config.enabled:
             return None
+
+        # ── routine engine tick (always runs, delivery gated by quiet hours) ──
+        routine_msg = await self._try_routine_tick(now)
+
         # ── closing nudge (once per workday) ─────────────────────
         closing_msg = await self._try_closing_nudge(now)
         if closing_msg:
             return closing_msg
-        # ── quiet hours always win ───────────────────────────────
+
+        # ── quiet hours always win for ordinary nudges ───────────
         if in_quiet_hours(now, self.config.quiet_hours_start, self.config.quiet_hours_end):
-            return None
+            return routine_msg
+
         # ── suppress ordinary reminders outside work hours ───────
         wh = self.work_hours
         if wh and wh.enabled and wh.suppress_off_hours:
@@ -128,7 +145,8 @@ class ReminderScheduler:
                 for task in to_drop:
                     self.store.drop(task)
                     await self.deliver(DROP_NOTICE.format(t=task.title))
-                return None
+                return routine_msg
+
         # ── ordinary nudge cycle ─────────────────────────────────
         due, to_drop = self.store.due_for_nudge(
             now, self.config.nudge_gaps_minutes, self.config.max_nudges,
@@ -138,12 +156,39 @@ class ReminderScheduler:
             await self.deliver(DROP_NOTICE.format(t=task.title))
             log.info("dropped task #%s after max nudges", task.id)
         if not due:
-            return None
+            return routine_msg
         message = compose_nudge(due, self.config.batch_limit)
         await self.deliver(message)
         self.store.record_nudge(due[: self.config.batch_limit], now)
         log.info("nudged %d task(s)", min(len(due), self.config.batch_limit))
+
+        # Return routine message if it was the only thing, otherwise the nudge
+        if routine_msg:
+            return routine_msg + "\n" + message
         return message
+
+    async def _try_routine_tick(self, now: datetime) -> str | None:
+        """Run the RoutineEngine tick if one is wired in.
+
+        Quiet hours suppress delivery but allow missed-marking state updates.
+        """
+        if self.routine_engine is None:
+            return None
+
+        in_quiet = in_quiet_hours(
+            now, self.config.quiet_hours_start, self.config.quiet_hours_end,
+        )
+        allow_delivery = not in_quiet
+
+        events = await self.routine_engine.tick_async(now, allow_delivery=allow_delivery)
+        if not events:
+            return None
+
+        # Collect messages from delivered events
+        messages = [e.message for e in events if e.event_type == "reminder" and e.delivered]
+        if messages:
+            return "\n".join(messages)
+        return None
 
     async def _try_closing_nudge(self, now: datetime) -> str | None:
         """Emit the once-per-workday closing nudge listing pending tasks.
