@@ -601,6 +601,39 @@ class GoalStore:
                 ).fetchone()
             )
 
+    def reopen(self, goal_id: int) -> Goal:
+        """Reset an achieved goal back to active so it can be retracked."""
+        with self._store._lock:
+            self._store._conn.execute(
+                "UPDATE goals SET status='active', achieved_at=NULL WHERE id=?",
+                (goal_id,),
+            )
+            self._store._conn.commit()
+            return self._row(
+                self._store._conn.execute(
+                    "SELECT * FROM goals WHERE id=?", (goal_id,)
+                ).fetchone()
+            )
+
+    def set_links(self, goal_id: int, linked_routine_ids: list[int]) -> Goal:
+        """Replace the linked routine IDs for a goal."""
+        with self._store._lock:
+            row = self._store._conn.execute(
+                "SELECT * FROM goals WHERE id=?", (goal_id,)
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"no goal #{goal_id}")
+            self._store._conn.execute(
+                "UPDATE goals SET linked_routine_ids=? WHERE id=?",
+                (_json_dumps(linked_routine_ids), goal_id),
+            )
+            self._store._conn.commit()
+            return self._row(
+                self._store._conn.execute(
+                    "SELECT * FROM goals WHERE id=?", (goal_id,)
+                ).fetchone()
+            )
+
     def cancel(self, goal_id: int) -> Goal:
         with self._store._lock:
             self._store._conn.execute(
