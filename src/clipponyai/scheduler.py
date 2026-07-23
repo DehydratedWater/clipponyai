@@ -28,7 +28,10 @@ from .config import RemindersConfig, WorkHoursConfig
 from .tasks import DROP_NOTICE, TaskStore, compose_nudge
 
 if TYPE_CHECKING:
+    from .accountability import ActivityStore
+    from .goals import GoalEngine
     from .routines import RoutineEngine
+    from .rules import RuleEngine
 
 log = logging.getLogger("clipponyai.scheduler")
 
@@ -108,12 +111,18 @@ class ReminderScheduler:
         deliver: Deliver,
         work_hours: WorkHoursConfig | None = None,
         routine_engine: RoutineEngine | None = None,
+        goal_engine: GoalEngine | None = None,
+        rule_engine: RuleEngine | None = None,
+        activity_store: ActivityStore | None = None,
     ) -> None:
         self.store = store
         self.config = config
         self.deliver = deliver
         self.work_hours = work_hours or (config.work_hours if hasattr(config, "work_hours") else None)
         self.routine_engine = routine_engine
+        self.goal_engine = goal_engine
+        self.rule_engine = rule_engine
+        self.activity_store = activity_store
         self._stop = asyncio.Event()
 
     async def tick(self, now: datetime | None = None) -> str | None:
@@ -121,6 +130,16 @@ class ReminderScheduler:
         now = now or datetime.now()
         if not self.config.enabled:
             return None
+
+        in_quiet = in_quiet_hours(
+            now, self.config.quiet_hours_start, self.config.quiet_hours_end,
+        )
+
+        # ── goal sync (runs every tick regardless of quiet hours) ──
+        self._try_goal_sync(now)
+
+        # ── rule engine tick (after quiet gating, allow_delivery=False in quiet) ──
+        rule_msg = await self._try_rule_tick(now, allow_delivery=not in_quiet)
 
         # ── routine engine tick (always runs, delivery gated by quiet hours) ──
         routine_msg = await self._try_routine_tick(now)
@@ -131,8 +150,9 @@ class ReminderScheduler:
             return closing_msg
 
         # ── quiet hours always win for ordinary nudges ───────────
-        if in_quiet_hours(now, self.config.quiet_hours_start, self.config.quiet_hours_end):
-            return routine_msg
+        if in_quiet:
+            parts = [m for m in [rule_msg, routine_msg] if m]
+            return "\n".join(parts) if parts else None
 
         # ── suppress ordinary reminders outside work hours ───────
         wh = self.work_hours
@@ -145,7 +165,8 @@ class ReminderScheduler:
                 for task in to_drop:
                     self.store.drop(task)
                     await self.deliver(DROP_NOTICE.format(t=task.title))
-                return routine_msg
+                parts = [m for m in [rule_msg, routine_msg] if m]
+                return "\n".join(parts) if parts else None
 
         # ── ordinary nudge cycle ─────────────────────────────────
         due, to_drop = self.store.due_for_nudge(
@@ -155,17 +176,52 @@ class ReminderScheduler:
             self.store.drop(task)
             await self.deliver(DROP_NOTICE.format(t=task.title))
             log.info("dropped task #%s after max nudges", task.id)
-        if not due:
-            return routine_msg
-        message = compose_nudge(due, self.config.batch_limit)
-        await self.deliver(message)
-        self.store.record_nudge(due[: self.config.batch_limit], now)
-        log.info("nudged %d task(s)", min(len(due), self.config.batch_limit))
+        parts = [m for m in [rule_msg, routine_msg] if m]
+        if not due and not parts:
+            return None
+        nudge_msg = None
+        if due:
+            nudge_msg = compose_nudge(due, self.config.batch_limit)
+            await self.deliver(nudge_msg)
+            self.store.record_nudge(due[: self.config.batch_limit], now)
+            log.info("nudged %d task(s)", min(len(due), self.config.batch_limit))
+            # Record activity for nudge delivery
+            if self.activity_store is not None:
+                titles = ", ".join(t.title for t in due[: self.config.batch_limit])
+                self.activity_store.record(
+                    "nudge_delivered", actor="scheduler",
+                    detail=f"Nudge sent for: {titles}",
+                )
 
-        # Return routine message if it was the only thing, otherwise the nudge
-        if routine_msg:
-            return routine_msg + "\n" + message
-        return message
+        # Combine all messages
+        all_parts = [m for m in [rule_msg, routine_msg, nudge_msg] if m]
+        return "\n".join(all_parts)
+
+    def _try_goal_sync(self, now: datetime) -> None:
+        """Run GoalEngine sync for today (always, regardless of quiet hours)."""
+        if self.goal_engine is None:
+            return
+        try:
+            self.goal_engine.sync(now.date())
+        except Exception:
+            log.exception("goal sync failed")
+
+    async def _try_rule_tick(
+        self, now: datetime, *, allow_delivery: bool = True
+    ) -> str | None:
+        """Run RuleEngine tick. Delivery gated by *allow_delivery*."""
+        if self.rule_engine is None:
+            return None
+        try:
+            fired = self.rule_engine.tick(now, allow_delivery=allow_delivery)
+            if not fired:
+                return None
+            # Build combined message from fired rules
+            messages = [r.message or f"Rule triggered: {r.title}" for r in fired]
+            return "\n".join(messages)
+        except Exception:
+            log.exception("rule tick failed")
+            return None
 
     async def _try_routine_tick(self, now: datetime) -> str | None:
         """Run the RoutineEngine tick if one is wired in.

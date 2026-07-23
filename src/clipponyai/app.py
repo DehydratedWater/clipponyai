@@ -17,7 +17,9 @@ from .brain import PonyBrain
 from .channels import Channel
 from .characters import get_character
 from .config import Config, config_path, data_dir, db_path
+from .goals import GoalEngine
 from .logwatch import read_recent_logs
+from .rules import RuleEngine
 from .scheduler import ReminderScheduler
 from .tasks import TaskStore
 
@@ -65,13 +67,27 @@ class Core:
         )
         # Wire RoutineEngine into the scheduler
         routine_engine = self._make_routine_engine()
+        # Wire GoalEngine
+        goal_engine = self._make_goal_engine()
+        # Wire RuleEngine
+        rule_engine = self._make_rule_engine()
+        # Inject engines into brain for tool handlers
+        self.brain._routine_engine = routine_engine
+        self.brain._goal_engine = goal_engine
+        self.brain._rule_engine = rule_engine
+        self.brain._activity_store = self.accountability["activity"]
+        self.brain._acct_stores = self.accountability
         self.scheduler = ReminderScheduler(
             self.store, config.reminders, self._deliver_nudge,
             work_hours=config.reminders.work_hours,
             routine_engine=routine_engine,
+            goal_engine=goal_engine,
+            rule_engine=rule_engine,
+            activity_store=self.accountability["activity"],
         )
         self.awareness_monitor = AwarenessMonitor(
             config, screenshot_fn, self._make_assessor(), self.store, self._deliver_nudge,
+            activity_store=self.accountability["activity"],
         )
         self.channels: list[Channel] = []
         self.observers: list[Observer] = []      # GUI mirrors exchanges live
@@ -126,6 +142,30 @@ class Core:
             task_store=self.store,
             deliver=self._deliver_nudge,
             activity_store=acct["activity"],
+        )
+
+    def _make_goal_engine(self):
+        """Build the GoalEngine wired into the scheduler."""
+        acct = self.accountability
+        return GoalEngine(
+            goal_store=acct["goals"],
+            progress_store=acct["goal_progress"],
+            routine_store=acct["routines"],
+            completion_store=acct["routine_completions"],
+            activity_store=acct["activity"],
+        )
+
+    def _make_rule_engine(self):
+        """Build the RuleEngine wired into the scheduler."""
+        acct = self.accountability
+
+        async def _rule_delivery(message: str, rule_id: int) -> None:
+            await self._deliver_nudge(message)
+
+        return RuleEngine(
+            rule_store=acct["rules"],
+            activity_store=acct["activity"],
+            delivery=_rule_delivery,
         )
 
     # ── reminders ────────────────────────────────────────────────────

@@ -18,9 +18,10 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Callable
+from typing import Any
 
 from .config import Config, WorkHoursConfig
 from .providers import VISION
@@ -130,7 +131,7 @@ def _work_hours_status(now: datetime, wh: WorkHoursConfig | None) -> str:
 class PonyBrainAssessor:
     """Uses PonyBrain's VISION lane to classify the screen."""
 
-    def __init__(self, brain: "PonyBrain") -> None:  # noqa: F821 – circular
+    def __init__(self, brain: PonyBrain) -> None:  # noqa: F821 – circular
         self._brain = brain
 
     def assess(
@@ -187,6 +188,7 @@ class AwarenessMonitor:
         store: Any,  # TaskStore – meta table access
         deliver: Any,  # Delivery: Callable[[str], Awaitable[None]]
         clock: Any | None = None,  # Clock protocol
+        activity_store: Any | None = None,  # ActivityStore for logging
     ) -> None:
         self.config = config
         self.screenshot_fn = screenshot_fn
@@ -194,6 +196,7 @@ class AwarenessMonitor:
         self.store = store
         self.deliver = deliver
         self.clock = clock if clock is not None else _RealClock()
+        self.activity_store = activity_store
         self._task: asyncio.Task | None = None
         self._stop = asyncio.Event()
 
@@ -321,6 +324,13 @@ class AwarenessMonitor:
 
         # Record cooldown timestamp
         self.store.set_meta(_META_LAST_ALERT, str(now.timestamp()))
+
+        # Record activity
+        if self.activity_store is not None:
+            self.activity_store.record(
+                "awareness_intervention", actor="awareness",
+                detail=f"Screen intervention: {assessment.reason}",
+            )
 
     def _in_cooldown(self, now: datetime) -> bool:
         """Check whether the last alert is still within the cooldown window."""

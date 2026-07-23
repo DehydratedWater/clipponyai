@@ -26,8 +26,9 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
-from datetime import datetime, timedelta
-from typing import Any, Callable
+from collections.abc import Callable
+from datetime import date, datetime, timedelta
+from typing import Any
 
 from open_agent_compiler import (
     AgentDefinition,
@@ -38,16 +39,20 @@ from open_agent_compiler import (
 from open_agent_compiler.interactive import build_interactive_spec, run_interactive
 from open_agent_compiler.interactive.spec import ToolSpec
 
+from .accountability import ActivityStore, get_stores
 from .characters import build_system_prompt, get_character
 from .config import Config
+from .goals import GoalEngine
 from .logwatch import read_recent_logs
 from .providers import FAST, SLOW, VISION, make_live_profile
+from .routines import RoutineEngine, current_streak
+from .rules import RuleEngine
 from .tasks import TaskStore, content_tokens
 from .timeparse import parse_when as parse_when_offline
 from .token_capture import (
+    RawResponseOpenAICompatClient,
     TokenCallback,
     TokenCaptureClient,
-    RawResponseOpenAICompatClient,
     lane_from_agent_id,
     purpose_from_agent_id,
 )
@@ -221,6 +226,256 @@ TOOL_SPECS: list[ToolSpec] = [
             "required": ["question"],
         },
     ),
+    # ── Routine tools ──────────────────────────────────────────
+    ToolSpec(
+        name="add_routine",
+        description=(
+            "Create a recurring routine (daily habit, weekly meeting, monthly task). "
+            "Unlike add_task which is one-time, routines repeat on a schedule. "
+            "Cadence: 'daily', 'weekdays', or 'monthly'. Weekdays are 0=Mon..6=Sun. "
+            "time_of_day is when the reminder fires. deadline_time is the hard cutoff."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "short title for the routine"},
+                "cadence": {"type": "string", "enum": ["daily", "weekdays", "monthly"],
+                            "description": "how often it repeats"},
+                "weekdays": {"type": "array", "items": {"type": "integer"},
+                             "description": "0=Mon..6=Sun, used with 'weekdays' cadence"},
+                "time_of_day": {"type": "string",
+                                "description": "reminder time as HH:MM"},
+                "day_of_month": {"type": "integer",
+                                 "description": "which day for monthly (1-31)"},
+                "deadline_time": {"type": "string",
+                                  "description": "hard deadline as HH:MM"},
+                "notes": {"type": "string"},
+            },
+            "required": ["title"],
+        },
+    ),
+    ToolSpec(
+        name="list_routines",
+        description="Show all active routines with their schedule, status, and streak.",
+        input_schema={"type": "object", "properties": {}},
+    ),
+    ToolSpec(
+        name="edit_routine",
+        description="Edit an existing routine's details.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "routine_id": {"type": "integer", "description": "routine id from list_routines"},
+                "title": {"type": "string"},
+                "cadence": {"type": "string", "enum": ["daily", "weekdays", "monthly"]},
+                "weekdays": {"type": "array", "items": {"type": "integer"}},
+                "time_of_day": {"type": "string"},
+                "day_of_month": {"type": "integer"},
+                "deadline_time": {"type": "string"},
+                "notes": {"type": "string"},
+            },
+            "required": ["routine_id"],
+        },
+    ),
+    ToolSpec(
+        name="complete_routine",
+        description="Mark today's occurrence of a routine as done.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "routine_id": {"type": "integer", "description": "routine id"},
+            },
+            "required": ["routine_id"],
+        },
+    ),
+    ToolSpec(
+        name="skip_routine",
+        description="Skip today's occurrence of a routine (counts as skipped for streak).",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "routine_id": {"type": "integer", "description": "routine id"},
+            },
+            "required": ["routine_id"],
+        },
+    ),
+    ToolSpec(
+        name="archive_routine",
+        description="Archive a routine (hide from active list, keeps history).",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "routine_id": {"type": "integer", "description": "routine id"},
+            },
+            "required": ["routine_id"],
+        },
+    ),
+    # ── Goal tools ─────────────────────────────────────────────
+    ToolSpec(
+        name="add_goal",
+        description=(
+            "Create a goal (milestone to track over time). Goals can track a count "
+            "of days met, a streak of consecutive days, or both. Optionally link "
+            "to routines so progress auto-syncs when those routines are completed."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "short title"},
+                "description": {"type": "string"},
+                "condition": {"type": "string",
+                              "description": "goal condition description"},
+                "target_count": {"type": "integer",
+                                 "description": "total days needed to achieve"},
+                "target_streak": {"type": "integer",
+                                  "description": "consecutive days needed"},
+                "linked_routine_ids": {
+                    "type": "array", "items": {"type": "integer"},
+                    "description": "routine ids to auto-sync from",
+                },
+            },
+            "required": ["title"],
+        },
+    ),
+    ToolSpec(
+        name="list_goals",
+        description="Show all goals with progress (count, streak, status).",
+        input_schema={"type": "object", "properties": {}},
+    ),
+    ToolSpec(
+        name="check_in_goal",
+        description="Manually record progress for a goal (met or not met for today).",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "goal_id": {"type": "integer", "description": "goal id"},
+                "met": {"type": "boolean", "description": "did you meet the goal today?"},
+                "note": {"type": "string", "description": "optional note"},
+            },
+            "required": ["goal_id", "met"],
+        },
+    ),
+    ToolSpec(
+        name="link_routine_to_goal",
+        description="Link a routine to a goal so progress auto-syncs.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "goal_id": {"type": "integer"},
+                "routine_id": {"type": "integer"},
+            },
+            "required": ["goal_id", "routine_id"],
+        },
+    ),
+    ToolSpec(
+        name="achieve_goal",
+        description="Manually mark a goal as achieved.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "goal_id": {"type": "integer"},
+            },
+            "required": ["goal_id"],
+        },
+    ),
+    ToolSpec(
+        name="reopen_goal",
+        description="Reopen an achieved goal so it can be retracked.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "goal_id": {"type": "integer"},
+            },
+            "required": ["goal_id"],
+        },
+    ),
+    # ── Rule tools ─────────────────────────────────────────────
+    ToolSpec(
+        name="add_rule",
+        description=(
+            "Create an accountability rule (automatic nudge based on time or custom condition). "
+            "Time rules use conditions like 'after 22:00' or 'between 09:00 and 17:00'."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "short title"},
+                "rule_type": {"type": "string", "enum": ["time", "screen", "custom"],
+                              "description": "rule category"},
+                "condition": {"type": "string",
+                              "description": "e.g. 'after 22:00', 'before 08:30', 'between 09:00 and 17:00'"},
+                "message": {"type": "string", "description": "what to say when triggered"},
+                "cooldown_minutes": {"type": "integer",
+                                     "description": "minutes before it can fire again"},
+            },
+            "required": ["title", "rule_type", "condition"],
+        },
+    ),
+    ToolSpec(
+        name="list_rules",
+        description="Show all accountability rules with status and cooldown.",
+        input_schema={"type": "object", "properties": {}},
+    ),
+    ToolSpec(
+        name="edit_rule",
+        description="Edit an existing accountability rule.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "rule_id": {"type": "integer", "description": "rule id"},
+                "title": {"type": "string"},
+                "condition": {"type": "string"},
+                "message": {"type": "string"},
+                "cooldown_minutes": {"type": "integer"},
+            },
+            "required": ["rule_id"],
+        },
+    ),
+    ToolSpec(
+        name="toggle_rule",
+        description="Enable or disable a rule.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "rule_id": {"type": "integer"},
+            },
+            "required": ["rule_id"],
+        },
+    ),
+    ToolSpec(
+        name="delete_rule",
+        description="Permanently delete a rule.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "rule_id": {"type": "integer"},
+            },
+            "required": ["rule_id"],
+        },
+    ),
+    # ── Activity & token tools ─────────────────────────────────
+    ToolSpec(
+        name="recent_activity",
+        description="Show recent activity log (routine completions, goal check-ins, rule fires, etc.).",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer",
+                          "description": "how many entries (default 20)"},
+            },
+        },
+    ),
+    ToolSpec(
+        name="token_usage",
+        description="Show token usage summary grouped by lane (chat, sensor, slow, vision).",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "period": {"type": "string", "enum": ["today", "7d", "all"],
+                           "description": "time window (default 'all')"},
+            },
+        },
+    ),
 ]
 
 
@@ -249,6 +504,13 @@ class PonyBrain:
         log_fn: Callable[[], str] | None = None,
         client_factory: Callable[[Any], Any] | None = None,  # tests inject fakes
         token_callback: TokenCallback | None = None,
+        # Optional injected accountability stores / engines (app.Core wires these).
+        # When None, PonyBrain creates its own from the TaskStore (headless/CLI).
+        accountability_stores: dict[str, Any] | None = None,
+        routine_engine: RoutineEngine | None = None,
+        goal_engine: GoalEngine | None = None,
+        rule_engine: RuleEngine | None = None,
+        activity_store: ActivityStore | None = None,
     ) -> None:
         self.config = config
         self.store = store
@@ -260,6 +522,50 @@ class PonyBrain:
         self.provider_name = config.llm.active
         self._specs: dict[tuple, Any] = {}
         self._turn_lock = asyncio.Lock()
+
+        # Accountability stores — injected or self-created
+        self._acct_stores = accountability_stores
+        self._routine_engine = routine_engine
+        self._goal_engine = goal_engine
+        self._rule_engine = rule_engine
+        self._activity_store = activity_store
+
+    # ── lazy store access ────────────────────────────────────────────
+    @property
+    def _stores(self) -> dict[str, Any]:
+        if self._acct_stores is None:
+            self._acct_stores = get_stores(self.store)
+        return self._acct_stores
+
+    @property
+    def _activity(self) -> ActivityStore | None:
+        if self._activity_store is not None:
+            return self._activity_store
+        return self._stores.get("activity")
+
+    @property
+    def _routine_engine(self) -> RoutineEngine | None:
+        return getattr(self, "_routine_engine_val", None)
+
+    @_routine_engine.setter
+    def _routine_engine(self, val: RoutineEngine | None) -> None:
+        self._routine_engine_val = val
+
+    @property
+    def _goal_engine(self) -> GoalEngine | None:
+        return getattr(self, "_goal_engine_val", None)
+
+    @_goal_engine.setter
+    def _goal_engine(self, val: GoalEngine | None) -> None:
+        self._goal_engine_val = val
+
+    @property
+    def _rule_engine(self) -> RuleEngine | None:
+        return getattr(self, "_rule_engine_val", None)
+
+    @_rule_engine.setter
+    def _rule_engine(self, val: RuleEngine | None) -> None:
+        self._rule_engine_val = val
 
     # ── switching ────────────────────────────────────────────────────
     def set_character(self, slug: str) -> None:
@@ -483,6 +789,8 @@ class PonyBrain:
             log.exception("tool %s failed", name)
             return f"ERROR: {e}"
 
+    # ── one-time task tools (with activity recording) ────────────────
+
     def _tool_add_task(self, args: dict) -> str:
         title = str(args.get("title", "")).strip()
         if not title:
@@ -500,6 +808,12 @@ class PonyBrain:
             priority=str(args.get("priority", "medium")),
             actor="pony",
         )
+        if created and self._activity is not None:
+            self._activity.record(
+                "task_added", actor="pony",
+                detail=f"Task '{task.title}' added (#{task.id})",
+                ref_type="task", ref_id=str(task.id),
+            )
         if not created:
             return f"already tracking that one: {task.describe()}"
         return f"added {task.describe()}"
@@ -523,13 +837,27 @@ class PonyBrain:
         task, err = self._resolve_or_explain(args)
         if err:
             return err
-        return f"done ✅ {self.store.complete(task, actor='pony').describe()}"
+        done = self.store.complete(task, actor="pony")
+        if self._activity is not None:
+            self._activity.record(
+                "task_completed", actor="pony",
+                detail=f"Task '{task.title}' completed",
+                ref_type="task", ref_id=str(task.id),
+            )
+        return f"done ✅ {done.describe()}"
 
     def _tool_cancel_task(self, args: dict) -> str:
         task, err = self._resolve_or_explain(args)
         if err:
             return err
-        return f"cancelled: {self.store.cancel(task, actor='pony').describe()}"
+        cancelled = self.store.cancel(task, actor="pony")
+        if self._activity is not None:
+            self._activity.record(
+                "task_cancelled", actor="pony",
+                detail=f"Task '{task.title}' cancelled",
+                ref_type="task", ref_id=str(task.id),
+            )
+        return f"cancelled: {cancelled.describe()}"
 
     def _tool_snooze_task(self, args: dict) -> str:
         task, err = self._resolve_or_explain(args)
@@ -538,12 +866,396 @@ class PonyBrain:
         until = self.parse_when(str(args.get("until", "")))
         if until is None:
             return "ERROR: could not understand the time — ask the user when to come back"
-        return f"snoozed until {until:%a %d %b %H:%M}: {self.store.snooze(task, until).describe()}"
+        snoozed = self.store.snooze(task, until)
+        if self._activity is not None:
+            self._activity.record(
+                "task_snoozed", actor="pony",
+                detail=f"Task '{task.title}' snoozed to {until:%Y-%m-%d %H:%M}",
+                ref_type="task", ref_id=str(task.id),
+            )
+        return f"snoozed until {until:%a %d %b %H:%M}: {snoozed.describe()}"
 
     def _tool_restore_task(self, args: dict) -> str:
         ref = str(args.get("ref", "")).strip()
         task = self.store.restore(ref)
+        if task is not None and self._activity is not None:
+            self._activity.record(
+                "task_restored", actor="pony",
+                detail=f"Task '{task.title}' restored",
+                ref_type="task", ref_id=str(task.id),
+            )
         return f"restored: {task.describe()}" if task else f"no dropped task matches {ref!r}"
+
+    # ── routine tools ────────────────────────────────────────────────
+
+    def _tool_add_routine(self, args: dict) -> str:
+        title = str(args.get("title", "")).strip()
+        if not title:
+            return "ERROR: title is required"
+        routine = self._stores["routines"].add(
+            title,
+            notes=str(args.get("notes", "")),
+            cadence=str(args.get("cadence", "daily")),
+            weekdays=args.get("weekdays") or [],
+            time_of_day=str(args.get("time_of_day", "")) or None,
+            day_of_month=args.get("day_of_month"),
+            deadline_time=str(args.get("deadline_time", "")) or None,
+        )
+        if self._activity is not None:
+            self._activity.record(
+                "routine_added", actor="pony",
+                detail=f"Routine '{routine.title}' added (#{routine.id})",
+                ref_type="routine", ref_id=str(routine.id),
+            )
+        return f"added routine #{routine.id}: {routine.title} ({routine.cadence})"
+
+    def _tool_list_routines(self, args: dict) -> str:
+        routines = self._stores["routines"].list_all()
+        if not routines:
+            return "No routines set up yet."
+        lines = ["Active routines:"]
+        today = date.today()
+        comp_store = self._stores["routine_completions"]
+        for r in routines:
+            comps = comp_store.by_routine(r.id)
+            streak = current_streak(r, comps, today)
+            status = "enabled" if r.enabled else "DISABLED"
+            sched = ""
+            if r.cadence == "daily":
+                sched = "daily"
+            elif r.cadence == "weekdays":
+                wd = r.weekdays or list(range(5))
+                day_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+                sched = ", ".join(day_names[d] for d in wd)
+            elif r.cadence == "monthly":
+                sched = f"day {r.day_of_month or 1}"
+            time_info = ""
+            if r.time_of_day:
+                time_info = f" @ {r.time_of_day}"
+            if r.deadline_time:
+                time_info += f" (deadline {r.deadline_time})"
+            lines.append(
+                f"  • [#{r.id}] {r.title} — {r.cadence} ({sched}){time_info} "
+                f"[{status}] streak={streak}"
+            )
+        return "\n".join(lines)
+
+    def _tool_edit_routine(self, args: dict) -> str:
+        rid = args.get("routine_id")
+        if rid is None:
+            return "ERROR: routine_id is required"
+        try:
+            updated = self._stores["routines"].update(
+                rid,
+                title=str(args.get("title", "")).strip() or None,
+                cadence=str(args.get("cadence", "")).strip() or None,
+                weekdays=args.get("weekdays"),
+                time_of_day=str(args.get("time_of_day", "")).strip() or None,
+                day_of_month=args.get("day_of_month"),
+                deadline_time=str(args.get("deadline_time", "")).strip() or None,
+                notes=str(args.get("notes", "")) or None,
+            )
+        except KeyError:
+            return f"no routine #{rid}"
+        if self._activity is not None:
+            self._activity.record(
+                "routine_edited", actor="pony",
+                detail=f"Routine '{updated.title}' edited",
+                ref_type="routine", ref_id=str(updated.id),
+            )
+        return f"updated routine #{updated.id}: {updated.title}"
+
+    def _tool_complete_routine(self, args: dict) -> str:
+        rid = args.get("routine_id")
+        if rid is None:
+            return "ERROR: routine_id is required"
+        try:
+            self._stores["routines"].get(rid)
+        except KeyError:
+            return f"no routine #{rid}"
+        engine = self._routine_engine
+        if engine is None:
+            return f"ERROR: routine engine not available (routine #{rid})"
+        event = engine.complete_today(rid, datetime.now())
+        return event.message
+
+    def _tool_skip_routine(self, args: dict) -> str:
+        rid = args.get("routine_id")
+        if rid is None:
+            return "ERROR: routine_id is required"
+        try:
+            self._stores["routines"].get(rid)
+        except KeyError:
+            return f"no routine #{rid}"
+        engine = self._routine_engine
+        if engine is None:
+            return f"ERROR: routine engine not available (routine #{rid})"
+        event = engine.skip_today(rid, datetime.now())
+        return event.message
+
+    def _tool_archive_routine(self, args: dict) -> str:
+        rid = args.get("routine_id")
+        if rid is None:
+            return "ERROR: routine_id is required"
+        try:
+            self._stores["routines"].get(rid)
+        except KeyError:
+            return f"no routine #{rid}"
+        archived = self._stores["routines"].archive(rid)
+        if self._activity is not None:
+            self._activity.record(
+                "routine_archived", actor="pony",
+                detail=f"Routine '{archived.title}' archived",
+                ref_type="routine", ref_id=str(archived.id),
+            )
+        return f"archived routine #{archived.id}: {archived.title}"
+
+    # ── goal tools ───────────────────────────────────────────────────
+
+    def _tool_add_goal(self, args: dict) -> str:
+        title = str(args.get("title", "")).strip()
+        if not title:
+            return "ERROR: title is required"
+        goal = self._stores["goals"].add(
+            title,
+            description=str(args.get("description", "")),
+            condition=str(args.get("condition", "")),
+            target_count=args.get("target_count"),
+            target_streak=args.get("target_streak"),
+            linked_routine_ids=args.get("linked_routine_ids") or [],
+        )
+        if self._activity is not None:
+            self._activity.record(
+                "goal_added", actor="pony",
+                detail=f"Goal '{goal.title}' added (#{goal.id})",
+                ref_type="goal", ref_id=str(goal.id),
+            )
+        parts = [f"added goal #{goal.id}: {goal.title}"]
+        if goal.target_count is not None:
+            parts.append(f"target={goal.target_count} days")
+        if goal.target_streak is not None:
+            parts.append(f"streak={goal.target_streak}")
+        return " — ".join(parts)
+
+    def _tool_list_goals(self, args: dict) -> str:
+        engine = self._goal_engine
+        if engine is None:
+            goals = self._stores["goals"].list_all()
+            if not goals:
+                return "No goals set up yet."
+            lines = ["Goals:"]
+            for g in goals:
+                lines.append(f"  • [#{g.id}] {g.title} ({g.status})")
+            return "\n".join(lines)
+        summaries = engine.summaries()
+        if not summaries:
+            return "No goals set up yet."
+        lines = ["Goals:"]
+        for s in summaries:
+            targets = []
+            if s.target_count is not None:
+                targets.append(f"count={s.count}/{s.target_count}")
+            if s.target_streak is not None:
+                targets.append(f"streak={s.current_streak}/{s.target_streak}")
+            target_str = ", ".join(targets) if targets else "no target"
+            lines.append(
+                f"  • [#{s.goal_id}] {s.title} — {s.status} "
+                f"[{target_str}] longest={s.longest_streak}"
+            )
+        return "\n".join(lines)
+
+    def _tool_check_in_goal(self, args: dict) -> str:
+        gid = args.get("goal_id")
+        met = args.get("met")
+        if gid is None or met is None:
+            return "ERROR: goal_id and met are required"
+        try:
+            self._stores["goals"].get(gid)
+        except KeyError:
+            return f"no goal #{gid}"
+        engine = self._goal_engine
+        if engine is None:
+            return "ERROR: goal engine not available"
+        entry = engine.check_in(gid, date.today(), met=bool(met),
+                                note=str(args.get("note", "")))
+        status = "met" if entry.met else "not met"
+        return f"goal check-in recorded: {status}"
+
+    def _tool_link_routine_to_goal(self, args: dict) -> str:
+        gid = args.get("goal_id")
+        rid = args.get("routine_id")
+        if gid is None or rid is None:
+            return "ERROR: goal_id and routine_id are required"
+        try:
+            self._stores["goals"].get(gid)
+        except KeyError:
+            return f"no goal #{gid}"
+        try:
+            self._stores["routines"].get(rid)
+        except KeyError:
+            return f"no routine #{rid}"
+        engine = self._goal_engine
+        if engine is None:
+            return "ERROR: goal engine not available"
+        updated = engine.link_routine(gid, rid)
+        return f"linked routine #{rid} to goal #{gid}: {updated.title}"
+
+    def _tool_achieve_goal(self, args: dict) -> str:
+        gid = args.get("goal_id")
+        if gid is None:
+            return "ERROR: goal_id is required"
+        try:
+            self._stores["goals"].get(gid)
+        except KeyError:
+            return f"no goal #{gid}"
+        engine = self._goal_engine
+        if engine is None:
+            return "ERROR: goal engine not available"
+        achieved = engine.mark_achieved(gid)
+        return f"goal #{achieved.id} '{achieved.title}' marked achieved!"
+
+    def _tool_reopen_goal(self, args: dict) -> str:
+        gid = args.get("goal_id")
+        if gid is None:
+            return "ERROR: goal_id is required"
+        try:
+            self._stores["goals"].get(gid)
+        except KeyError:
+            return f"no goal #{gid}"
+        engine = self._goal_engine
+        if engine is None:
+            return "ERROR: goal engine not available"
+        reopened = engine.reopen(gid)
+        return f"goal #{reopened.id} '{reopened.title}' reopened"
+
+    # ── rule tools ───────────────────────────────────────────────────
+
+    def _tool_add_rule(self, args: dict) -> str:
+        title = str(args.get("title", "")).strip()
+        rule_type = str(args.get("rule_type", "custom")).strip()
+        condition = str(args.get("condition", "")).strip()
+        if not title:
+            return "ERROR: title is required"
+        if not rule_type:
+            return "ERROR: rule_type is required"
+        if not condition:
+            return "ERROR: condition is required"
+        rule = self._stores["rules"].add(
+            title,
+            rule_type=rule_type,
+            condition=condition,
+            message=str(args.get("message", "")),
+            cooldown_minutes=int(args.get("cooldown_minutes", 0)),
+        )
+        if self._activity is not None:
+            self._activity.record(
+                "rule_added", actor="pony",
+                detail=f"Rule '{rule.title}' added (#{rule.id})",
+                ref_type="accountability_rule", ref_id=str(rule.id),
+            )
+        return f"added rule #{rule.id}: {rule.title} ({rule_type})"
+
+    def _tool_list_rules(self, args: dict) -> str:
+        rules = self._stores["rules"].list_all()
+        if not rules:
+            return "No accountability rules set up yet."
+        lines = ["Accountability rules:"]
+        for r in rules:
+            status = "enabled" if r.enabled else "DISABLED"
+            cooldown = f" cooldown={r.cooldown_minutes}m" if r.cooldown_minutes else ""
+            lines.append(
+                f"  • [#{r.id}] {r.title} — {r.rule_type}: {r.condition} "
+                f"[{status}]{cooldown}"
+            )
+        return "\n".join(lines)
+
+    def _tool_edit_rule(self, args: dict) -> str:
+        rid = args.get("rule_id")
+        if rid is None:
+            return "ERROR: rule_id is required"
+        try:
+            updated = self._stores["rules"].update(
+                rid,
+                title=str(args.get("title", "")).strip() or None,
+                condition=str(args.get("condition", "")).strip() or None,
+                message=str(args.get("message", "")) or None,
+                cooldown_minutes=int(args["cooldown_minutes"]) if "cooldown_minutes" in args else None,
+            )
+        except KeyError:
+            return f"no rule #{rid}"
+        if self._activity is not None:
+            self._activity.record(
+                "rule_edited", actor="pony",
+                detail=f"Rule '{updated.title}' edited",
+                ref_type="accountability_rule", ref_id=str(updated.id),
+            )
+        return f"updated rule #{updated.id}: {updated.title}"
+
+    def _tool_toggle_rule(self, args: dict) -> str:
+        rid = args.get("rule_id")
+        if rid is None:
+            return "ERROR: rule_id is required"
+        try:
+            toggled = self._stores["rules"].toggle(rid)
+        except KeyError:
+            return f"no rule #{rid}"
+        status = "enabled" if toggled.enabled else "disabled"
+        if self._activity is not None:
+            self._activity.record(
+                "rule_toggled", actor="pony",
+                detail=f"Rule '{toggled.title}' {status}",
+                ref_type="accountability_rule", ref_id=str(toggled.id),
+            )
+        return f"rule #{toggled.id} '{toggled.title}' {status}"
+
+    def _tool_delete_rule(self, args: dict) -> str:
+        rid = args.get("rule_id")
+        if rid is None:
+            return "ERROR: rule_id is required"
+        try:
+            rule = self._stores["rules"].get(rid)
+        except KeyError:
+            return f"no rule #{rid}"
+        self._stores["rules"].delete(rid)
+        if self._activity is not None:
+            self._activity.record(
+                "rule_deleted", actor="pony",
+                detail=f"Rule '{rule.title}' deleted",
+                ref_type="accountability_rule", ref_id=str(rule.id),
+            )
+        return f"deleted rule #{rule.id}: {rule.title}"
+
+    # ── activity & token tools ───────────────────────────────────────
+
+    def _tool_recent_activity(self, args: dict) -> str:
+        activity = self._activity
+        if activity is None:
+            return "Activity logging not available."
+        limit = int(args.get("limit", 20))
+        entries = activity.recent(limit)
+        if not entries:
+            return "No recent activity."
+        lines = ["Recent activity:"]
+        for e in entries:
+            ref = f" ({e.ref_type}#{e.ref_id})" if e.ref_id else ""
+            lines.append(f"  • [{e.at:%Y-%m-%d %H:%M}] {e.action}{ref} — {e.detail}")
+        return "\n".join(lines)
+
+    def _tool_token_usage(self, args: dict) -> str:
+        period = str(args.get("period", "all")).strip()
+        store = self._stores["token_usage"]
+        summary = store.summary(period)
+        if not summary:
+            return f"No token usage data for {period}."
+        lines = [f"Token usage ({period}):"]
+        for row in summary:
+            lines.append(
+                f"  • {row['lane']}: {row['total_tokens']} tokens "
+                f"({row['count']} calls)"
+            )
+        return "\n".join(lines)
+
+    # ── deep think / screen / logs (unchanged) ───────────────────────
 
     def _tool_deep_think(self, args: dict) -> str:
         question = str(args.get("question", "")).strip()
