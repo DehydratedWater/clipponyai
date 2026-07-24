@@ -363,6 +363,7 @@ def run_gui(config: Config) -> int:
 
     from .capture import take_screenshot
     from .chat_window import ChatWindow
+    from .macos import raise_without_activating
     from .overlay import PonyWindow
     from .sprites import app_icon
 
@@ -516,7 +517,7 @@ def run_gui(config: Config) -> int:
             pony.hide()
         else:
             pony.show()
-            pony.raise_()
+            raise_without_activating(pony)
 
     def quit_app() -> None:
         async def _shutdown() -> None:

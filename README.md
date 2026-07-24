@@ -406,6 +406,13 @@ cursor-chasing and screenshots (`mss`). Most tested on Linux/X11. On Wayland,
 window self-positioning is compositor-dependent — the pony works but may
 wander less precisely.
 
+**She never steals your keyboard.** Everything she starts herself — speaking,
+a cursor-chase nudge, coming back from hidden — puts her on top without
+activating the app, so a bubble appearing mid-keystroke can't swallow what
+you were typing. (On macOS this needs care: Qt's `raise()` activates the
+whole application there, so she uses AppKit's `orderFront:` instead. Her
+always-on-top window level keeps her visible either way.)
+
 ### macOS permissions
 
 macOS requires explicit user grants for two capabilities:

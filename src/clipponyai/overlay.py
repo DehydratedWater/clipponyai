@@ -19,7 +19,7 @@ from PySide6.QtWidgets import QApplication, QLabel, QMenu, QWidget
 
 from .bubble import SpeechBubble
 from .characters import CHARACTERS, FORMS, get_character
-from .macos import join_all_spaces
+from .macos import join_all_spaces, raise_without_activating
 from .sprites import character_states, clippy_frames, orb_frames, pony_movie
 
 SPRITE = 110  # base sprite box (twilight gifs are ~96-130px wide)
@@ -69,8 +69,10 @@ class PonyWindow(QWidget):
             flags |= Qt.Tool
         super().__init__(None, flags)
         self.setAttribute(Qt.WA_TranslucentBackground)
-        if sys.platform == "darwin":
-            self.setAttribute(Qt.WA_ShowWithoutActivating)
+        # Unconditional (like the bubble): show() also runs when *she* decides
+        # to appear — a nudge, or coming back from hidden — and there is
+        # nothing to type into her, so she should never take focus anywhere.
+        self.setAttribute(Qt.WA_ShowWithoutActivating)
         self.size_px = int(SPRITE * scale)
         self.setFixedSize(int(self.size_px * 1.35), self.size_px)
 
@@ -222,7 +224,9 @@ class PonyWindow(QWidget):
         """Chase the cursor with the bubble pinned open until the user clicks
         the pony (acknowledged) or the time budget runs out."""
         self.show()
-        self.raise_()
+        # A nudge must be *seen*, not typed into: come to the front without
+        # activating the app, so an interrupted sentence stays intact.
+        raise_without_activating(self)
         self._attention_ticks = max(1, msec // TICK_MS)
         self.bubble.hold(True)
         self.bounce()

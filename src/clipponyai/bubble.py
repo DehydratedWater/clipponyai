@@ -8,7 +8,7 @@ from PySide6.QtCore import QEvent, QPoint, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QTextDocument
 from PySide6.QtWidgets import QApplication, QWidget
 
-from .macos import join_all_spaces
+from .macos import join_all_spaces, raise_without_activating
 from .markdown import md_to_html
 
 PAD = 12
@@ -80,7 +80,10 @@ class SpeechBubble(QWidget):
         self._doc.setHtml(f'<div style="color:#efeaff">{md_to_html(self._text)}</div>')
         self.reanchor(anchor)
         self.show()
-        self.raise_()
+        # never raise_(): speaking is unprompted, and on macOS that would
+        # activate the app and swallow the keystroke the user is mid-way
+        # through typing somewhere else.
+        raise_without_activating(self)
         if self._held:
             self._timer.stop()
             return
