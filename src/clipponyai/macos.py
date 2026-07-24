@@ -32,6 +32,9 @@ def join_all_spaces(widget, *, overlay: bool = False) -> None:
     Control and are excluded from Cmd-` window cycling. Call from the
     widget's Show / WinIdChange event handling: Qt destroys and recreates
     the NSWindow whenever window flags change, wiping this behavior.
+
+    Safe to call at any point in that lifecycle — while the window is being
+    torn down there is nothing to talk to, and this is a no-op.
     """
     if sys.platform != "darwin":
         return
@@ -43,9 +46,20 @@ def join_all_spaces(widget, *, overlay: bool = False) -> None:
             _warned = True
             log.warning("pyobjc not available — windows will not follow across Spaces")
         return
+    # Never call winId() here: it force-*creates* a native window. WinIdChange
+    # fires while Qt is tearing one down, so creating from this handler
+    # resurrects a view Qt immediately discards and leaves the cached winId
+    # pointing at freed memory. Messaging that pointer is a segfault, not a
+    # catchable exception, so the try/except below would not save us.
+    # internalWinId()/windowHandle() only ever report what already exists.
+    if widget.windowHandle() is None:
+        return
+    raw = int(widget.internalWinId() or 0)
+    if not raw:
+        return
     try:
-        # winId() on macOS is the NSView*; its window() is the NSWindow.
-        view = objc.objc_object(c_void_p=ctypes.c_void_p(int(widget.winId())))
+        # internalWinId() on macOS is the NSView*; its window() is the NSWindow.
+        view = objc.objc_object(c_void_p=ctypes.c_void_p(raw))
         ns_window = view.window()
         if ns_window is None:
             return
