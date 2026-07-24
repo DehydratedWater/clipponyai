@@ -13,12 +13,13 @@ import random
 import sys
 from collections.abc import Callable
 
-from PySide6.QtCore import QPoint, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QPoint, Qt, QTimer, Signal
 from PySide6.QtGui import QCursor, QMovie, QPixmap
 from PySide6.QtWidgets import QApplication, QLabel, QMenu, QWidget
 
 from .bubble import SpeechBubble
 from .characters import CHARACTERS, FORMS, get_character
+from .macos import join_all_spaces
 from .sprites import character_states, clippy_frames, orb_frames, pony_movie
 
 SPRITE = 110  # base sprite box (twilight gifs are ~96-130px wide)
@@ -114,6 +115,13 @@ class PonyWindow(QWidget):
 
         self._apply_visual()
         self.move_to_default()
+
+    def event(self, e) -> bool:  # noqa: N802
+        # Re-apply on every Show/WinIdChange: Qt recreates the NSWindow when
+        # window flags change, which wipes the collection behavior.
+        if e.type() in (QEvent.Type.Show, QEvent.Type.WinIdChange):
+            join_all_spaces(self, overlay=True)
+        return super().event(e)
 
     # ── visuals ──────────────────────────────────────────────────────
     @property

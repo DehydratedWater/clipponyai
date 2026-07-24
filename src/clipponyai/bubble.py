@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import sys
 
-from PySide6.QtCore import QPoint, QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QPoint, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QTextDocument
 from PySide6.QtWidgets import QApplication, QWidget
 
+from .macos import join_all_spaces
 from .markdown import md_to_html
 
 PAD = 12
@@ -37,6 +38,13 @@ class SpeechBubble(QWidget):
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
         self._timer.timeout.connect(self.hide)
+
+    def event(self, e) -> bool:  # noqa: N802
+        # Re-apply on every Show/WinIdChange: Qt recreates the NSWindow when
+        # window flags change, which wipes the collection behavior.
+        if e.type() in (QEvent.Type.Show, QEvent.Type.WinIdChange):
+            join_all_spaces(self, overlay=True)
+        return super().event(e)
 
     def default_msec(self) -> int:
         """Generous dwell: the reader may only glance over mid-task, so give

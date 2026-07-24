@@ -6,11 +6,12 @@ import html
 import sys
 from datetime import datetime
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QEvent, Qt, Signal
 from PySide6.QtWidgets import (
     QHBoxLayout, QLabel, QLineEdit, QPushButton, QTextBrowser, QVBoxLayout, QWidget,
 )
 
+from .macos import join_all_spaces
 from .markdown import md_to_html
 
 BUBBLE_BG = {"user": "#453a6e", "assistant": "#23324a", "system": "#2a2440"}
@@ -75,6 +76,14 @@ class ChatWindow(QWidget):
         lay.addWidget(self.log)
         lay.addWidget(self.typing_label)
         lay.addLayout(row)
+
+    def event(self, e) -> bool:  # noqa: N802
+        # Re-apply on every Show/WinIdChange: Qt recreates the NSWindow when
+        # window flags change, which wipes the collection behavior. Not an
+        # overlay: keep the chat in Mission Control and Cmd-` cycling.
+        if e.type() in (QEvent.Type.Show, QEvent.Type.WinIdChange):
+            join_all_spaces(self)
+        return super().event(e)
 
     def set_pony_name(self, name: str) -> None:
         self.pony_name = name
