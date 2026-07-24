@@ -122,7 +122,8 @@ def test_live_multimodal_awareness_path(_live_provider_cfg, tmp_path):
     try:
         assessment = PonyBrainAssessor(PonyBrain(config, store)).assess(
             _make_synthetic_vision_image(),
-            work_hours_status="Currently inside work hours.",
+            current_time="2026-07-22 10:00 (Wednesday)",
+            work_hours_status="Currently INSIDE work hours.",
             task_overview="(none)",
             focus_policy=(
                 "Interrupt only if the image does not have red on the left and blue on the right."

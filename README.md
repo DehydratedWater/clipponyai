@@ -290,12 +290,28 @@ awareness:
 ```
 
 **How it works.** Every `interval_seconds`, the pony takes a screenshot and
-sends it to the LLM's vision lane along with the current work-hours status,
-pending tasks overview, and the natural-language `focus_policy`. The vision
-model returns a structured decision (`should_interrupt`, `confidence`, `reason`).
-If the decision passes the `minimum_confidence` threshold and says to interrupt,
-the pony delivers a cursor-chase nudge. A cooldown timer (persisted in SQLite)
-prevents repeat alerts within `cooldown_minutes`.
+sends it to the LLM's vision lane along with the current local time and weekday,
+the current work-hours status, pending tasks overview, and the natural-language
+`focus_policy`. The vision model returns a structured decision
+(`should_interrupt`, `confidence`, `reason`). If the decision passes the
+`minimum_confidence` threshold and says to interrupt, the pony delivers a
+cursor-chase nudge. A cooldown timer (persisted in SQLite) prevents repeat
+alerts within `cooldown_minutes`.
+
+**Time-conditional policies need work hours enabled.** The default
+`focus_policy` gates its no-social-media clause on "during work hours". The pony
+only knows your work-hours window when `reminders.work_hours.enabled: true` —
+otherwise it is told the condition is unverified, and clauses conditioned on it
+do not fire. Set your window if you want that gating to be sharp:
+
+```yaml
+reminders:
+  work_hours:
+    enabled: true
+    start: "09:00"
+    end: "17:00"
+    weekdays: [0, 1, 2, 3, 4]   # Mon=0 … Sun=6
+```
 
 **macOS Screen Recording permission.** On macOS, `screenshot_enabled: true`
 requires the Screen Recording permission grant in

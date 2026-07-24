@@ -92,8 +92,10 @@ class FakeAssessor:
         self.calls = []
         self._fail_next = False
 
-    def assess(self, screenshot_bytes, *, work_hours_status, task_overview, focus_policy):
+    def assess(self, screenshot_bytes, *, current_time, work_hours_status, task_overview,
+               focus_policy):
         self.calls.append({
+            "current_time": current_time,
             "work_hours_status": work_hours_status,
             "task_overview": task_overview,
             "focus_policy": focus_policy,
@@ -490,6 +492,57 @@ class TestWorkHoursContext:
 
         assert "not configured" in assessor.calls[0]["work_hours_status"].lower()
 
+    async def test_unconfigured_work_hours_marked_unverified(
+        self, config, store, fake_screenshot
+    ):
+        """Unconfigured work hours must read as *unknown*, not as a blank.
+
+        Regression: the old wording ("Work hours not configured.") let the model
+        treat a work-hours-conditional policy clause as unconditional and fire
+        the no-social-media rule at any hour.
+        """
+        config.awareness.enabled = True
+        config.screenshot_enabled = True
+        config.reminders.work_hours.enabled = False
+
+        clock = FakeClock(datetime(2026, 7, 24, 20, 54))  # Friday evening
+        assessor = FakeAssessor(ScreenAssessment(False, 0.9, "ok"))
+
+        monitor = AwarenessMonitor(
+            config, lambda: fake_screenshot, assessor, store,
+            AsyncMock(), clock=clock,
+        )
+        await monitor.start()
+        await monitor._tick()
+        await monitor.stop()
+
+        status = assessor.calls[0]["work_hours_status"].lower()
+        assert "not known" in status or "unverified" in status
+
+    async def test_current_time_passed_to_assessor(self, config, store, fake_screenshot):
+        """The assessor is told the wall-clock time and weekday.
+
+        Regression: without a clock reference the model could not evaluate any
+        time-conditional policy clause and interrupted outside work hours.
+        """
+        config.awareness.enabled = True
+        config.screenshot_enabled = True
+
+        clock = FakeClock(datetime(2026, 7, 24, 20, 54))  # Friday 20:54
+        assessor = FakeAssessor(ScreenAssessment(False, 0.9, "ok"))
+
+        monitor = AwarenessMonitor(
+            config, lambda: fake_screenshot, assessor, store,
+            AsyncMock(), clock=clock,
+        )
+        await monitor.start()
+        await monitor._tick()
+        await monitor.stop()
+
+        current_time = assessor.calls[0]["current_time"]
+        assert "2026-07-24 20:54" in current_time
+        assert "Friday" in current_time
+
     async def test_task_overview_passed(self, config, store, fake_screenshot):
         config.awareness.enabled = True
         config.screenshot_enabled = True
@@ -789,6 +842,7 @@ class TestPonyBrainAssessor:
 
         result = assessor.assess(
             b"\x89PNG fake",
+            current_time="2026-07-22 10:00 (Wednesday)",
             work_hours_status="inside work hours",
             task_overview="(none)",
             focus_policy="interrupt on social media",
@@ -829,10 +883,45 @@ class TestPonyBrainAssessor:
         with pytest.raises(ValueError):
             assessor.assess(
                 b"\x89PNG fake",
+                current_time="2026-07-22 10:00 (Wednesday)",
                 work_hours_status="inside work hours",
                 task_overview="(none)",
                 focus_policy="interrupt on social media",
             )
+
+    def test_prompt_grounds_time_and_gates_conditional_clauses(self, config, store):
+        """The rendered vision prompt carries the clock and the no-assume rule."""
+        from clipponyai.brain import PonyBrain
+
+        clients = []
+
+        def factory(spec):
+            from conftest import FakeClient
+
+            client = FakeClient(spec, {
+                "pony-vision": {"should_interrupt": False, "confidence": 0.9, "reason": "ok"},
+            })
+            clients.append(client)
+            return client
+
+        assessor = PonyBrainAssessor(PonyBrain(config, store, client_factory=factory))
+        assessor.assess(
+            b"\x89PNG fake",
+            current_time="2026-07-24 20:54 (Friday)",
+            work_hours_status="Work hours are not configured",
+            task_overview="(none)",
+            focus_policy="During work hours, interrupt on social media.",
+        )
+
+        vision = [c for c in clients if c.spec.agent_id == "pony-vision"][0]
+        text = "".join(
+            part.get("text", "")
+            for message in vision.calls[0]["messages"]
+            if isinstance(message.get("content"), list)
+            for part in message["content"]
+        )
+        assert "2026-07-24 20:54 (Friday)" in text
+        assert "do not assume it applies" in text.lower()
 
 
 # ── settings roundtrip ────────────────────────────────────────────────

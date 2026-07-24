@@ -54,14 +54,22 @@ _ASSESSMENT_SCHEMA: dict[str, Any] = {
 _ASSESSMENT_PROMPT_TEMPLATE = """\
 You look at a screenshot of the user's screen and decide whether to interrupt them.
 
+Current local time: {current_time}
 Current work-hours status: {work_hours_status}
 Focus policy (verbatim): {focus_policy}
 
 Pending tasks overview:
 {task_overview}
 
-Look at this screenshot. Based on the focus policy, work-hours status, and pending tasks,
-decide whether to interrupt the user. Return strictly as JSON."""
+Decision rules:
+- The focus policy is the only reason to interrupt. Do not invent reasons of your own.
+- A clause that is conditional ("during work hours", "in the evening", ...) fires only when
+  the time and work-hours status above show its condition holds right now. If the condition
+  does not hold, or you cannot tell, that clause does not apply — do not assume it applies.
+- If no clause clearly applies to what is on screen right now, set should_interrupt to false.
+
+Look at this screenshot. Based on the focus policy, the current time, work-hours status, and
+pending tasks, decide whether to interrupt the user. Return strictly as JSON."""
 
 
 # ── data types ────────────────────────────────────────────────────────
@@ -115,14 +123,27 @@ def parse_assessment(result: Any) -> ScreenAssessment:
 
 
 def _work_hours_status(now: datetime, wh: WorkHoursConfig | None) -> str:
-    """Return a human-readable work-hours status string for the assessment prompt."""
+    """Return a human-readable work-hours status string for the assessment prompt.
+
+    The "not configured" wording states outright that the condition is *unknown*.
+    Saying only "not configured" let the model treat a work-hours-conditional
+    policy clause as if it were unconditional and interrupt at any hour.
+    """
     if wh is None or not wh.enabled:
-        return "Work hours not configured."
+        return (
+            "Work hours are not configured, so it is NOT known whether the user is "
+            "currently within their work hours. Treat this condition as unverified."
+        )
     from .scheduler import in_work_hours as _in_wh
 
     if _in_wh(now, wh):
-        return f"Currently inside work hours ({wh.start}–{wh.end})."
-    return f"Currently outside work hours ({wh.start}–{wh.end})."
+        return f"Currently INSIDE work hours ({wh.start}–{wh.end})."
+    return f"Currently OUTSIDE work hours ({wh.start}–{wh.end})."
+
+
+def _current_time(now: datetime) -> str:
+    """Format the wall-clock time for the prompt, matching the when-sensor's style."""
+    return f"{now:%Y-%m-%d %H:%M} ({now:%A})"
 
 
 # ── VISION lane assessor ──────────────────────────────────────────────
@@ -138,12 +159,14 @@ class PonyBrainAssessor:
         self,
         screenshot_bytes: bytes,
         *,
+        current_time: str,
         work_hours_status: str,
         task_overview: str,
         focus_policy: str,
     ) -> ScreenAssessment:
         b64 = base64.b64encode(screenshot_bytes).decode()
         prompt = _ASSESSMENT_PROMPT_TEMPLATE.format(
+            current_time=current_time,
             work_hours_status=work_hours_status,
             task_overview=task_overview or "(none)",
             focus_policy=focus_policy,
@@ -294,6 +317,7 @@ class AwarenessMonitor:
             assessment = await asyncio.to_thread(
                 self.assessor.assess,
                 png,
+                current_time=_current_time(now),
                 work_hours_status=work_status,
                 task_overview=task_overview,
                 focus_policy=focus_policy,
