@@ -19,6 +19,7 @@ config.local.*
 *.sqlite3
 *.db
 screenshots/
+logs/
 .env
 
 # OS / editors
