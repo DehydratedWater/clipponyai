@@ -10,6 +10,7 @@ the personality (the brain rebuilds the persona prompt).
 from __future__ import annotations
 
 import random
+import sys
 from collections.abc import Callable
 
 from PySide6.QtCore import QPoint, Qt, QTimer, Signal
@@ -57,11 +58,18 @@ class PonyWindow(QWidget):
 
     def __init__(self, character: str = "twilight", scale: float = 1.0,
                  idle_wander: bool = True) -> None:
-        super().__init__(
-            None,
-            Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool,
-        )
+        # macOS force-hides Qt.Tool windows whenever this app is not the active
+        # application, so the pony would vanish the instant you click another
+        # window (WA_MacAlwaysShowToolWindow is unreliable on Qt6). Use a plain
+        # frameless always-on-top window there, shown without stealing focus.
+        # Other platforms keep Qt.Tool (keeps her off the taskbar; best on X11).
+        flags = Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
+        if sys.platform != "darwin":
+            flags |= Qt.Tool
+        super().__init__(None, flags)
         self.setAttribute(Qt.WA_TranslucentBackground)
+        if sys.platform == "darwin":
+            self.setAttribute(Qt.WA_ShowWithoutActivating)
         self.size_px = int(SPRITE * scale)
         self.setFixedSize(int(self.size_px * 1.35), self.size_px)
 
