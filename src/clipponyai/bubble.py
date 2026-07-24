@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+
 from PySide6.QtCore import QPoint, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QTextDocument
 from PySide6.QtWidgets import QApplication, QWidget
@@ -17,11 +19,13 @@ class SpeechBubble(QWidget):
     clicked = Signal()  # user dismissed the bubble by clicking it
 
     def __init__(self) -> None:
-        super().__init__(
-            None,
-            Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool
-            | Qt.WindowDoesNotAcceptFocus,
-        )
+        # Same macOS Qt.Tool auto-hide fix as the pony window: drop Qt.Tool on
+        # macOS so the bubble stays visible when the app is not frontmost.
+        flags = (Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
+                 | Qt.WindowDoesNotAcceptFocus)
+        if sys.platform != "darwin":
+            flags |= Qt.Tool
+        super().__init__(None, flags)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setAttribute(Qt.WA_ShowWithoutActivating)
         self._text = ""

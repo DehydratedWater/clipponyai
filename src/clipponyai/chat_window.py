@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+import sys
 from datetime import datetime
 
 from PySide6.QtCore import Qt, Signal
@@ -22,7 +23,12 @@ class ChatWindow(QWidget):
     closed = Signal()
 
     def __init__(self, pony_name: str = "pony") -> None:
-        super().__init__(None, Qt.WindowStaysOnTopHint | Qt.Tool)
+        # Drop Qt.Tool on macOS so the chat window does not auto-hide when the
+        # app loses focus (same macOS Qt.Tool quirk as the pony/bubble).
+        flags = Qt.WindowStaysOnTopHint
+        if sys.platform != "darwin":
+            flags |= Qt.Tool
+        super().__init__(None, flags)
         self.pony_name = pony_name
         self.setWindowTitle("clipponyai")
         self.resize(420, 480)
