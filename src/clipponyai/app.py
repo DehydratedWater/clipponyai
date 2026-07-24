@@ -20,6 +20,7 @@ from .config import Config, config_path, data_dir, db_path
 from .context_questions import ProactiveQuestioner
 from .goals import GoalEngine
 from .logwatch import read_recent_logs
+from .mcp import MCPManager
 from .onboarding import OnboardingManager
 from .rules import RuleEngine
 from .scheduler import ReminderScheduler
@@ -61,11 +62,13 @@ class Core:
                 estimated=estimated,
             )
 
+        self.mcp_manager = MCPManager(config.mcp)
         self.brain = PonyBrain(
             config, self.store, screenshot_fn=screenshot_fn,
             log_fn=lambda: read_recent_logs(config.logwatch),
             client_factory=client_factory,
             token_callback=_token_callback,
+            mcp_manager=self.mcp_manager,
         )
         # Wire RoutineEngine into the scheduler
         routine_engine = self._make_routine_engine()

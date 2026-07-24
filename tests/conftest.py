@@ -68,7 +68,13 @@ def make_brain(config, store):
     """Brain factory with a scriptable fake client; no network ever."""
     from clipponyai.brain import PonyBrain
 
-    def _make(handlers=None, **config_overrides):
+    def _make(
+        handlers=None,
+        *,
+        mcp_manager=None,
+        skills_library=None,
+        **config_overrides,
+    ):
         for key, value in config_overrides.items():
             setattr(config, key, value)
         clients = []
@@ -78,7 +84,13 @@ def make_brain(config, store):
             clients.append(client)
             return client
 
-        brain = PonyBrain(config, store, client_factory=factory)
+        brain = PonyBrain(
+            config,
+            store,
+            client_factory=factory,
+            mcp_manager=mcp_manager,
+            skills_library=skills_library,
+        )
         brain._test_clients = clients
         return brain
 

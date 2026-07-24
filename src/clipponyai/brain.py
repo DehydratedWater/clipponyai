@@ -565,6 +565,8 @@ class PonyBrain:
         goal_engine: GoalEngine | None = None,
         rule_engine: RuleEngine | None = None,
         activity_store: ActivityStore | None = None,
+        mcp_manager: Any | None = None,
+        skills_library: Any | None = None,
     ) -> None:
         self.config = config
         self.store = store
@@ -583,6 +585,8 @@ class PonyBrain:
         self._goal_engine = goal_engine
         self._rule_engine = rule_engine
         self._activity_store = activity_store
+        self._mcp = mcp_manager
+        self._skills = skills_library
 
     # ── lazy store access ────────────────────────────────────────────
     @property
@@ -680,7 +684,53 @@ class PonyBrain:
                     live_profile=make_live_profile(self.provider_name, provider_cfg, kind),
                 )
             self._specs[key] = spec
-        return self._specs[key]
+        spec = self._specs[key]
+        if kind == FAST and self._mcp is not None:
+            spec = spec.model_copy(update={
+                "tools": tuple(TOOL_SPECS) + tuple(self._mcp_tool_specs()),
+            })
+        return spec
+
+    def _mcp_tool_specs(self) -> list[ToolSpec]:
+        """Return the current MCP tool snapshot in the runner's native format."""
+        if self._mcp is None:
+            return []
+        return [
+            ToolSpec(
+                name=info.namespaced_name,
+                description=f"[{info.server}] {info.description}".rstrip(),
+                input_schema=info.input_schema,
+            )
+            for info in self._mcp.tools()
+        ]
+
+    def _mcp_context_note(self) -> str:
+        """Build a compact per-turn summary of connected external services."""
+        if self._mcp is None:
+            return ""
+
+        instructions = self._mcp.instructions()
+        servers = set(instructions)
+        servers.update(info.server for info in self._mcp.tools())
+
+        status_fn = getattr(self._mcp, "status", None)
+        if callable(status_fn):
+            for name, state in status_fn().items():
+                status = getattr(state.status, "value", state.status)
+                if status == "connected":
+                    servers.add(name)
+
+        if not servers:
+            return ""
+        lines = [
+            "## Connected external services",
+            "You have extra tools from user-configured services (names start with mcp__).",
+        ]
+        lines.extend(
+            f"[{server}] {instructions.get(server) or '(no description provided)'}"
+            for server in sorted(servers)
+        )
+        return "\n".join(lines)
 
     def _sensor_spec(self, system_prompt: str, agent_id: str):
         """A fast-model spec with a minimal prompt — the 'small fast call'."""
@@ -758,6 +808,11 @@ class PonyBrain:
         if onboarding_note:
             spec = spec.model_copy(update={
                 "system_prompt": spec.system_prompt + "\n\n" + onboarding_note,
+            })
+        mcp_note = self._mcp_context_note()
+        if mcp_note:
+            spec = spec.model_copy(update={
+                "system_prompt": spec.system_prompt + "\n\n" + mcp_note,
             })
         result = self._run(
             spec, user_turn,
@@ -843,6 +898,8 @@ class PonyBrain:
     # ── tools ────────────────────────────────────────────────────────
     def _tool_runner(self, name: str, args: dict) -> str:
         try:
+            if name.startswith("mcp__") and self._mcp is not None:
+                return self._mcp.call(name, args)
             handler = getattr(self, f"_tool_{name}", None)
             if handler is None:
                 return f"ERROR: unknown tool {name}"
