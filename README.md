@@ -192,7 +192,7 @@ orchestrator, keeping its battle-tested rules:
 
 ## Configuration
 
-Everything lives in one commented YAML (`clipponyai init` creates it;
+Everything lives in one YAML file (`clipponyai init` creates it;
 `clipponyai doctor` checks it):
 
 ```yaml
@@ -232,6 +232,23 @@ telegram:
   token_env: TELEGRAM_BOT_TOKEN     # token from @BotFather
   allowed_user_ids: []              # EMPTY = answers nobody. add your id!
 ```
+
+### Personalize your pony (MCP + Skills)
+
+Connect any [Model Context Protocol](https://modelcontextprotocol.io/) server
+in `config.yaml` using paste-friendly `mcpServers`-style fields. After a
+restart, its tools appear automatically in chat; run `clipponyai check-mcp`
+first to verify each connection and see the discovered tool names. Per-server
+allow and deny lists keep the pony's tool set focused.
+
+Agent Skills are portable instruction packs: put a folder containing
+`SKILL.md` in a scanned skills directory and the pony will advertise its name
+and description, then load the full instructions only when relevant. The
+format follows the open [Agent Skills specification](https://agentskills.io/).
+
+See [Personalization with MCP and Agent Skills](docs/personalization.md) for
+the complete config reference, runnable examples, troubleshooting, skill
+authoring, and a commented config template.
 
 ### Work hours
 
@@ -343,6 +360,7 @@ clipponyai doctor       check config / keys / sprites / extras / awareness
 clipponyai tasks        print the task overview in your terminal
 clipponyai fetch-sprites   (re)download sprites
 clipponyai check-llm    smoke-test the active LLM provider (returns 0/1)
+clipponyai check-mcp    check MCP connections and discovered tools (returns 0/1)
 clipponyai autostart [enable|disable|status]   manage login autostart
 clipponyai install-desktop       install .desktop entry (Linux) / explain (macOS)
 ```

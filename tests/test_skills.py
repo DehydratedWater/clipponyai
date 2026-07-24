@@ -192,6 +192,19 @@ def test_skill_tools_only_appear_in_fast_lane(make_brain):
     assert brain._spec(VISION).tools == ()
 
 
+def test_documented_example_skill_is_valid_and_loadable():
+    example_root = (
+        Path(__file__).parents[1] / "docs" / "examples" / "skills"
+    )
+    library = SkillsLibrary(SkillsConfig(dirs=[str(example_root)]))
+
+    assert library.names() == ["commit-messages"]
+    assert "Write an imperative subject" in library.load("commit-messages")
+    assert "feat: add keyboard navigation" in library.read_file(
+        "commit-messages", "references/examples.md"
+    )
+
+
 async def test_brain_catalog_and_activation_tool_round_trip(tmp_path, make_brain):
     root = tmp_path / "skills"
     _write_skill(
