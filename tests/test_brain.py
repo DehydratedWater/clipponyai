@@ -221,6 +221,16 @@ async def test_sensor_commitment_without_time_gets_ttl(make_brain, store):
     assert task.deadline - before < timedelta(hours=2)
 
 
+async def test_sensor_does_not_duplicate_assistant_planner_command(make_brain, store):
+    brain = make_brain({
+        "pony": "routine added",
+        "message-sensor": {"done_task_ids": [], "maybe_done_task_ids": [],
+                           "commitments": [{"text": "Breakfast routine", "when": ""}]},
+    })
+    await brain.respond("Set up a daily Breakfast routine at 08:00")
+    assert store.pending() == []
+
+
 async def test_sensor_ungrounded_commitment_skipped(make_brain, store):
     brain = make_brain({
         "pony": "ok",

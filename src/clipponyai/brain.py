@@ -67,6 +67,19 @@ _MICRO_HINTS = {
 _COMMITMENT_TTL_MICRO = timedelta(minutes=90)
 _COMMITMENT_TTL = timedelta(hours=36)
 
+# Direct commands to the pony are requests, not promises by the user.  The
+# LLM sensor is instructed about this too, but this small deterministic guard
+# prevents structured planner commands from becoming duplicate one-time tasks.
+_ASSISTANT_COMMAND_PREFIXES = (
+    "add ", "create ", "delete ", "edit ", "list ", "make ", "remind ",
+    "restore ", "schedule ", "set up ", "show ", "snooze ", "track ",
+)
+
+
+def _is_assistant_command(text: str) -> bool:
+    normalized = " ".join(text.casefold().strip().split())
+    return normalized.startswith(_ASSISTANT_COMMAND_PREFIXES)
+
 # ── sensor schemas & prompts (small fast calls, tiny context) ─────────
 _SENSE_SCHEMA = {
     "type": "object",
@@ -106,8 +119,11 @@ task list and report, strictly as JSON:
 - commitments: the user's OWN new future actions stated in passing ("I'll
   call mom later", "muszę wysłać maila"). Exclude: negations, questions,
   hypotheticals, past events, other people's actions, actions already in the
-  pending list, and requests TO the assistant ("remind me to X" is the
-  assistant's job, not a promise). Keep each under 8 words, empty list if none.
+  pending list, and EVERY command/request TO the assistant. Examples that MUST
+  return no commitment: "remind me to X", "set up a daily X routine", "create
+  a goal", "add a rule", "schedule X", "track X", "list my tasks". Those are
+  assistant jobs handled by tools, not promises by the user. Keep each under
+  8 words, empty list if none.
 """
 
 _WHEN_SCHEMA = {
@@ -800,8 +816,9 @@ class PonyBrain:
                 f"which, do NOT guess, and do NOT claim anything was completed."
             )
 
-        # commitments: auto-track passing promises, grounded by token overlap
-        if self.config.auto_track_commitments:
+        # commitments: auto-track passing promises, grounded by token overlap.
+        # Never turn a direct planner command into a duplicate one-time task.
+        if self.config.auto_track_commitments and not _is_assistant_command(text):
             now = datetime.now()
             for item in sense.get("commitments", [])[:3]:
                 title = str(item.get("text", "")).strip()
