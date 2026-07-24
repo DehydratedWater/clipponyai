@@ -24,6 +24,7 @@ from .mcp import MCPManager
 from .onboarding import OnboardingManager
 from .rules import RuleEngine
 from .scheduler import ReminderScheduler
+from .skills import SkillsLibrary
 from .tasks import TaskStore
 
 log = logging.getLogger("clipponyai.app")
@@ -42,6 +43,7 @@ class Core:
         screenshot_fn=None,
         client_factory=None,
         mcp_manager: MCPManager | None = None,
+        skills_library: SkillsLibrary | None = None,
     ) -> None:
         self.config = config
         self.store = TaskStore(db_path())
@@ -72,12 +74,18 @@ class Core:
         self.mcp_manager = (
             mcp_manager if mcp_manager is not None else MCPManager(config.mcp)
         )
+        self.skills_library = (
+            skills_library
+            if skills_library is not None
+            else SkillsLibrary(config.skills)
+        )
         self.brain = PonyBrain(
             config, self.store, screenshot_fn=screenshot_fn,
             log_fn=lambda: read_recent_logs(config.logwatch),
             client_factory=client_factory,
             token_callback=_token_callback,
             mcp_manager=self.mcp_manager,
+            skills_library=self.skills_library,
         )
         # Wire RoutineEngine into the scheduler
         routine_engine = self._make_routine_engine()

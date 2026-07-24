@@ -165,6 +165,14 @@ class MCPConfig(BaseModel):
         return value
 
 
+class SkillsConfig(BaseModel):
+    """Agent Skills discovery settings."""
+
+    enabled: bool = True
+    dirs: list[str] = Field(default_factory=list)
+    disabled: list[str] = Field(default_factory=list)
+
+
 class WorkHoursConfig(BaseModel):
     """Focused work-hours boundaries for closing reminders.
 
@@ -352,6 +360,7 @@ class Config(BaseModel):
     ui: UIConfig = Field(default_factory=UIConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
     mcp: MCPConfig = Field(default_factory=MCPConfig)
+    skills: SkillsConfig = Field(default_factory=SkillsConfig)
     reminders: RemindersConfig = Field(default_factory=RemindersConfig)
     telegram: TelegramConfig = Field(default_factory=TelegramConfig)
     logwatch: LogWatchConfig = Field(default_factory=LogWatchConfig)

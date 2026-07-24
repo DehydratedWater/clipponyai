@@ -539,6 +539,36 @@ TOOL_SPECS: list[ToolSpec] = [
         ),
         input_schema={"type": "object", "properties": {}},
     ),
+    # ── Agent Skills tools ─────────────────────────────────────
+    ToolSpec(
+        name="activate_skill",
+        description=(
+            "Load the full instructions of an available skill. Use when the "
+            "user's request matches a skill's description."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "available skill name"},
+            },
+            "required": ["name"],
+        },
+    ),
+    ToolSpec(
+        name="read_skill_file",
+        description=(
+            "Read a reference file bundled with an activated skill "
+            "(relative path from the skill directory)."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "skill": {"type": "string", "description": "activated skill name"},
+                "path": {"type": "string", "description": "relative bundled file path"},
+            },
+            "required": ["skill", "path"],
+        },
+    ),
 ]
 
 
@@ -823,6 +853,12 @@ class PonyBrain:
             spec = spec.model_copy(update={
                 "system_prompt": spec.system_prompt + "\n\n" + mcp_note,
             })
+        if self._skills is not None:
+            skills_catalog = self._skills.catalog()
+            if skills_catalog:
+                spec = spec.model_copy(update={
+                    "system_prompt": spec.system_prompt + "\n\n" + skills_catalog,
+                })
         result = self._run(
             spec, user_turn,
             tool_runner=self._tool_runner, history=history,
@@ -948,6 +984,31 @@ class PonyBrain:
             else:
                 lines.append(f"{name}: {status}")
         return "\n".join(lines)
+
+    def _tool_activate_skill(self, args: dict) -> str:
+        if self._skills is None:
+            return "ERROR: skills are not configured"
+        name = str(args.get("name", "")).strip()
+        if not name:
+            return "ERROR: skill name is required"
+        try:
+            return self._skills.load(name)
+        except Exception as exc:
+            return f"ERROR: {exc}"
+
+    def _tool_read_skill_file(self, args: dict) -> str:
+        if self._skills is None:
+            return "ERROR: skills are not configured"
+        skill = str(args.get("skill", "")).strip()
+        path = str(args.get("path", "")).strip()
+        if not skill:
+            return "ERROR: skill name is required"
+        if not path:
+            return "ERROR: skill file path is required"
+        try:
+            return self._skills.read_file(skill, path)
+        except Exception as exc:
+            return f"ERROR: {exc}"
 
     # ── one-time task tools (with activity recording) ────────────────
 
