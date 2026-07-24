@@ -267,7 +267,8 @@ class AwarenessMonitor:
         """One classification cycle."""
         now = self.clock.now()
 
-        # Double-check gates each cycle (config may have changed)
+        # Double-check gates each cycle (config may have changed).
+        # When gates are off we sleep silently — no activity log entry.
         if not self.config.awareness.enabled or not self.config.screenshot_enabled:
             return
 
@@ -279,6 +280,7 @@ class AwarenessMonitor:
         png = await asyncio.to_thread(self.screenshot_fn)
         if not png:
             log.debug("awareness: screenshot failed, skipping")
+            self._record_failure("screenshot_failed", "screenshot capture returned empty")
             return
 
         # Build context
@@ -296,24 +298,29 @@ class AwarenessMonitor:
                 task_overview=task_overview,
                 focus_policy=focus_policy,
             )
-        except Exception:
+        except Exception as exc:
             log.exception("awareness: screen assessment failed")
+            self._record_failure(self._safe_error_class(exc), str(exc))
             return
 
-        # Confidence gate
-        if assessment.confidence < self.config.awareness.minimum_confidence:
-            log.debug(
-                "awareness: confidence %.2f below threshold %.2f, skipping",
-                assessment.confidence,
-                self.config.awareness.minimum_confidence,
-            )
+        should_intervene = (
+            assessment.should_interrupt
+            and assessment.confidence >= self.config.awareness.minimum_confidence
+        )
+
+        if not should_intervene:
+            # Record every successful assessment so the Activity panel proves
+            # awareness ran even when it correctly chose not to interrupt.
+            self._record_assessment(assessment, intervened=False)
+            if assessment.confidence < self.config.awareness.minimum_confidence:
+                log.debug(
+                    "awareness: confidence %.2f below threshold %.2f, skipping",
+                    assessment.confidence,
+                    self.config.awareness.minimum_confidence,
+                )
             return
 
-        # Interrupt decision
-        if not assessment.should_interrupt:
-            return
-
-        # Deliver nudge
+        # Deliver nudge, then record that an intervention really occurred.
         message = f"\U0001f434 {assessment.reason}"
         log.info(
             "awareness: interrupting — %s (confidence=%.2f)",
@@ -321,16 +328,44 @@ class AwarenessMonitor:
             assessment.confidence,
         )
         await self.deliver(message)
+        self._record_assessment(assessment, intervened=True)
 
         # Record cooldown timestamp
         self.store.set_meta(_META_LAST_ALERT, str(now.timestamp()))
 
-        # Record activity
+        # Record intervention activity (separate from the assessment entry above)
         if self.activity_store is not None:
             self.activity_store.record(
                 "awareness_intervention", actor="awareness",
                 detail=f"Screen intervention: {assessment.reason}",
             )
+
+    # ── audit helpers ────────────────────────────────────────────────
+
+    def _record_assessment(
+        self, assessment: ScreenAssessment, *, intervened: bool
+    ) -> None:
+        """Log a screen assessment result without screenshot data or secrets."""
+        if self.activity_store is None:
+            return
+        verdict = "intervened" if intervened else "no interrupt"
+        detail = (
+            f"verdict={verdict}, confidence={assessment.confidence:.2f}, "
+            f"reason={assessment.reason[:120]}"
+        )
+        self.activity_store.record("screen_assessed", actor="awareness", detail=detail)
+
+    def _record_failure(self, error_class: str, error_message: str) -> None:
+        """Log a screen_assessment_failed activity entry with safe error info."""
+        if self.activity_store is None:
+            return
+        detail = f"error={error_class}, message={error_message[:120]}"
+        self.activity_store.record("screen_assessment_failed", actor="awareness", detail=detail)
+
+    @staticmethod
+    def _safe_error_class(exc: Exception) -> str:
+        """Return the exception class name (no stack trace, no secrets)."""
+        return type(exc).__name__
 
     def _in_cooldown(self, now: datetime) -> bool:
         """Check whether the last alert is still within the cooldown window."""

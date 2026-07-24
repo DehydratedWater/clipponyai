@@ -597,6 +597,103 @@ def _build_awareness_tab(form: SettingsForm) -> QWidget:
     return page
 
 
+def _build_proactive_tab(form: SettingsForm) -> QWidget:
+    """Proactive questions settings — gates, privacy, and onboarding reset."""
+    page = QWidget()
+    lay = QVBoxLayout(page)
+    lay.setContentsMargins(8, 8, 8, 8)
+
+    # Info banner
+    info = QLabel(
+        "Proactive questions are concise context-gap prompts from the scheduler. "
+        "They fire only when ALL gates pass: onboarding complete, no pending tasks, "
+        "no due routines, no active goals with missing check-ins, outside quiet hours, "
+        "silence not active, and minimum gap elapsed. "
+        "No LLM call is needed — questions are deterministic."
+    )
+    info.setWordWrap(True)
+    info.setStyleSheet("color: #8d86a8; font-size: 11px; padding: 4px; "
+                       "background: #2a2a1a; border: 1px solid #5a5a33; border-radius: 4px;")
+    lay.addWidget(info)
+
+    box = QGroupBox("Proactive Questions")
+    fl = QFormLayout()
+
+    chk_enabled = QCheckBox("Enable proactive context-gap questions")
+    chk_enabled.setChecked(form.proactive_questions_enabled)
+
+    gap_spin = QSpinBox()
+    gap_spin.setRange(3, 24)
+    gap_spin.setSuffix(" h")
+    gap_spin.setValue(form.proactive_min_gap_hours)
+
+    batch_spin = QSpinBox()
+    batch_spin.setRange(1, 5)
+    batch_spin.setValue(form.proactive_max_questions_per_batch)
+
+    silence_spin = QSpinBox()
+    silence_spin.setRange(1, 168)
+    silence_spin.setSuffix(" h")
+    silence_spin.setValue(form.proactive_silence_default_hours)
+
+    chk_agenda = QCheckBox("Only ask when the agenda is empty")
+    chk_agenda.setToolTip("No pending tasks, due routines, or immediate goal check-ins")
+    chk_agenda.setChecked(form.proactive_require_empty_agenda)
+
+    err_gap = ErrorLabel()
+    err_batch = ErrorLabel()
+    err_silence = ErrorLabel()
+
+    fl.addRow("", chk_enabled)
+    fl.addRow("Min gap between batches:", gap_spin)
+    fl.addRow("", err_gap)
+    fl.addRow("Max questions per batch:", batch_spin)
+    fl.addRow("", err_batch)
+    fl.addRow("Silence duration (after \"don't bother me\"):", silence_spin)
+    fl.addRow("", err_silence)
+    fl.addRow("", chk_agenda)
+    box.setLayout(fl)
+    lay.addWidget(box)
+
+    # Onboarding section
+    onboarding_box = QGroupBox("Onboarding")
+    onboarding_fl = QFormLayout()
+
+    chk_onboarding = QCheckBox("Enable first-run onboarding")
+    chk_onboarding.setChecked(form.onboarding_enabled)
+
+    onboarding_hint = QLabel(
+        "Onboarding collects initial context via chat (name, work hours, routines, goals, rules). "
+        "To run it again, tell the pony ‘restart onboarding’. "
+        "Proactive questions wait until onboarding is complete."
+    )
+    onboarding_hint.setWordWrap(True)
+    onboarding_hint.setStyleSheet("color: #8d86a8; font-size: 11px;")
+
+    onboarding_fl.addRow("", chk_onboarding)
+    onboarding_fl.addRow("", onboarding_hint)
+    onboarding_box.setLayout(onboarding_fl)
+    lay.addWidget(onboarding_box)
+    lay.addStretch()
+
+    def apply() -> None:
+        form.proactive_questions_enabled = chk_enabled.isChecked()
+        form.proactive_min_gap_hours = gap_spin.value()
+        form.proactive_max_questions_per_batch = batch_spin.value()
+        form.proactive_silence_default_hours = silence_spin.value()
+        form.proactive_require_empty_agenda = chk_agenda.isChecked()
+        form.onboarding_enabled = chk_onboarding.isChecked()
+
+    def set_errors(errors: dict[str, str]) -> None:
+        err_gap.set_error(errors.get("proactive_gap"))
+        err_batch.set_error(errors.get("proactive_batch"))
+        err_silence.set_error(errors.get("proactive_silence"))
+
+    page._apply = apply  # type: ignore[attr-defined]
+    page._set_errors = set_errors  # type: ignore[attr-defined]
+    return page
+
+
 # ── main dialog ────────────────────────────────────────────────────────
 
 
@@ -660,6 +757,7 @@ class SettingsDialog(QDialog):
         self._tabs.addTab(_build_workhours_tab(self.form), "Work Hours")
         self._tabs.addTab(_build_logwatch_tab(self.form), "Log Watch")
         self._tabs.addTab(_build_awareness_tab(self.form), "Awareness")
+        self._tabs.addTab(_build_proactive_tab(self.form), "Proactive")
         self._tabs.addTab(_build_llm_tab(self.form, available_providers), "LLM")
         self._tabs.addTab(_build_misc_tab(self.form), "Misc")
         main_lay.addWidget(self._tabs)
@@ -728,6 +826,12 @@ class SettingsDialog(QDialog):
                 mapping["awareness_cooldown"] = err
             elif "awareness" in err_lower and "confidence" in err_lower:
                 mapping["awareness_confidence"] = err
+            elif "proactive" in err_lower and "gap" in err_lower:
+                mapping["proactive_gap"] = err
+            elif "proactive" in err_lower and "batch" in err_lower:
+                mapping["proactive_batch"] = err
+            elif "proactive" in err_lower and "silence" in err_lower:
+                mapping["proactive_silence"] = err
 
         for i in range(self._tabs.count()):
             tab = self._tabs.widget(i)

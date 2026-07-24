@@ -97,6 +97,14 @@ class SettingsForm:
     awareness_minimum_confidence: float = 0.7
     awareness_focus_policy: str = ""
 
+    # proactive questions (context-gap nudges from the scheduler)
+    onboarding_enabled: bool = True
+    proactive_questions_enabled: bool = True
+    proactive_min_gap_hours: int = 4
+    proactive_max_questions_per_batch: int = 3
+    proactive_silence_default_hours: int = 24
+    proactive_require_empty_agenda: bool = True
+
 
 # ── read from Config ───────────────────────────────────────────────────
 
@@ -146,6 +154,12 @@ def read_form(config: Config, *, autostart_enabled: bool = False) -> SettingsFor
         awareness_cooldown_minutes=aw.cooldown_minutes,
         awareness_minimum_confidence=aw.minimum_confidence,
         awareness_focus_policy=aw.focus_policy,
+        onboarding_enabled=config.onboarding.enabled,
+        proactive_questions_enabled=config.proactive_questions.enabled,
+        proactive_min_gap_hours=config.proactive_questions.min_gap_hours,
+        proactive_max_questions_per_batch=config.proactive_questions.max_questions_per_batch,
+        proactive_silence_default_hours=config.proactive_questions.silence_default_hours,
+        proactive_require_empty_agenda=config.proactive_questions.require_empty_agenda,
     )
 
 
@@ -249,6 +263,14 @@ def validate(form: SettingsForm, *, available_providers: list[str],
     if not (0.0 <= form.awareness_minimum_confidence <= 1.0):
         errors.append("Awareness confidence must be between 0.0 and 1.0")
 
+    # proactive questions
+    if not (3 <= form.proactive_min_gap_hours <= 24):
+        errors.append("Proactive questions gap must be 3–24 hours")
+    if not (1 <= form.proactive_max_questions_per_batch <= 5):
+        errors.append("Proactive questions per batch must be 1–5")
+    if not (1 <= form.proactive_silence_default_hours <= 168):
+        errors.append("Proactive silence duration must be 1–168 hours")
+
     return errors
 
 
@@ -306,6 +328,15 @@ def apply_to_config(form: SettingsForm, config: Config) -> None:
     aw.cooldown_minutes = form.awareness_cooldown_minutes
     aw.minimum_confidence = form.awareness_minimum_confidence
     aw.focus_policy = form.awareness_focus_policy
+
+    config.onboarding.enabled = form.onboarding_enabled
+
+    pq = config.proactive_questions
+    pq.enabled = form.proactive_questions_enabled
+    pq.min_gap_hours = form.proactive_min_gap_hours
+    pq.max_questions_per_batch = form.proactive_max_questions_per_batch
+    pq.silence_default_hours = form.proactive_silence_default_hours
+    pq.require_empty_agenda = form.proactive_require_empty_agenda
 
 
 def detect_changes(old: SettingsForm, new: SettingsForm) -> dict[str, bool]:

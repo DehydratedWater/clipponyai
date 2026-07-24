@@ -308,6 +308,9 @@ def _open_settings(pony, core: Core, config: Config, chat=None) -> None:
         new_scale = config.ui.scale
         if abs((pony.size_px / 128) - new_scale) > 0.01:
             pony.set_scale(new_scale)
+        # Update proactive questioner's config reference in-place
+        if core.proactive_questioner is not None:
+            core.proactive_questioner.config = config.proactive_questions
         try:
             asyncio.get_running_loop().create_task(core.awareness_monitor.refresh())
         except RuntimeError:

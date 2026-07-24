@@ -7,6 +7,8 @@ hitting the display.
 
 from __future__ import annotations
 
+import pytest
+
 from clipponyai.config import Config
 from clipponyai.settings_apply import (
     CHARACTER_SLUGS,
@@ -685,3 +687,36 @@ class TestFullRoundTrip:
         assert form.autostart_enabled is True
         form2 = read_form(config, autostart_enabled=False)
         assert form2.autostart_enabled is False
+
+
+class TestProactiveSettings:
+    def test_roundtrip(self):
+        config = Config()
+        form = read_form(config)
+        form.onboarding_enabled = False
+        form.proactive_questions_enabled = False
+        form.proactive_min_gap_hours = 6
+        form.proactive_max_questions_per_batch = 2
+        form.proactive_silence_default_hours = 48
+        form.proactive_require_empty_agenda = False
+        apply_to_config(form, config)
+        assert config.onboarding.enabled is False
+        assert config.proactive_questions.enabled is False
+        assert config.proactive_questions.min_gap_hours == 6
+        assert config.proactive_questions.max_questions_per_batch == 2
+        assert config.proactive_questions.silence_default_hours == 48
+        assert config.proactive_questions.require_empty_agenda is False
+
+    @pytest.mark.parametrize(
+        ("field", "value", "needle"),
+        [
+            ("proactive_min_gap_hours", 2, "3–24"),
+            ("proactive_max_questions_per_batch", 6, "1–5"),
+            ("proactive_silence_default_hours", 169, "1–168"),
+        ],
+    )
+    def test_validation(self, field, value, needle):
+        form = SettingsForm()
+        setattr(form, field, value)
+        errors = validate(form, available_providers=["openai"])
+        assert any(needle in error for error in errors)

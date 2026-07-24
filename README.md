@@ -47,6 +47,50 @@ clipponyai                    # 🦄 (sprites download on first run)
   plain, Pinkie throws bubble-sized parties, plus Clippy (📎, fully aware
   what he is) and a minimal focus Orb.
 
+## Planner, routines, goals, and accountability
+
+The pony uses four related but distinct kinds of planning data. You can manage
+all of them by talking naturally or through **📊 Planner & Activity** in the
+pony/tray menu:
+
+- **Tasks** are one-time agenda items: “submit the form tomorrow at 10.”
+- **Routines** recur daily, on selected weekdays, or monthly. Examples include
+  breakfast every day, medication at 08:00, watering flowers every Tuesday,
+  and paying tax on day 20 of each month. Monthly days that do not exist in a
+  short month are clamped to that month's final day. Each occurrence can be
+  done, skipped, or missed and contributes to current/longest streaks.
+- **Goals** are outcomes with count or streak conditions. They can be checked
+  in manually or linked to routines, such as “read for 30 consecutive days.”
+- **Rules** describe accountability boundaries, such as “no YouTube after
+  22:00.” Time rules are deterministic. Screen-based rules only run when the
+  separate, opt-in screen-awareness privacy gates are enabled.
+
+The dashboard has six live tabs: **Tasks, Routines, Goals, Rules, Activity, and
+Token Usage**. Forms and conversation tools write to the same SQLite records,
+so changes made in one surface immediately appear in the other.
+
+On a fresh profile, the pony asks one compact onboarding batch about work
+hours, recurring responsibilities, goals, and boundaries. You may answer only
+part of it or skip it. Later context-gap questions have a default four-hour
+minimum and only fire when useful context is missing. They stay silent when
+there is a pending agenda, a due routine/goal check-in, quiet/off-hours, another
+notification in that scheduler pass, or an explicit “don't bother me” period.
+These controls are editable in **Settings → Proactive**.
+
+For transparency, **Activity** retains the last 200 pony actions. Every actual
+screen assessment records a safe verdict, reason, and confidence—even when no
+intervention occurs—but never stores the screenshot itself. **Token Usage**
+shows chat/sensor/slow/vision consumption for today, seven days, and all time;
+entries are marked *estimated* when a provider does not return exact usage.
+
+Conversation examples:
+
+- “Remind me to take medication every day at 8 AM.”
+- “Water the flowers every Tuesday at 18:00.”
+- “Pay tax on the 20th of every month, due by 17:00.”
+- “Create a 14-day breakfast streak goal and link it to my breakfast routine.”
+- “No YouTube after 10 PM, and don't ask me setup questions for 24 hours.”
+
 ## LLM providers — bring your own brain
 
 Everything OpenAI-compatible works. The config ships with ready entries —

@@ -702,6 +702,70 @@ class TestLifecycle:
         assert "TikTok" in msg
 
 
+# ── transparent activity audit ────────────────────────────────────────
+
+
+class TestAwarenessActivityAudit:
+    def _activity(self, store):
+        from clipponyai.accountability import get_stores
+
+        return get_stores(store)["activity"]
+
+    async def test_records_non_intervention(self, config, store, fake_screenshot):
+        config.awareness.enabled = True
+        config.screenshot_enabled = True
+        activity = self._activity(store)
+        monitor = AwarenessMonitor(
+            config, lambda: fake_screenshot,
+            FakeAssessor(ScreenAssessment(False, 0.93, "focused work")),
+            store, AsyncMock(), clock=FakeClock(), activity_store=activity,
+        )
+        await monitor._tick()
+        row = activity.recent()[-1]
+        assert row.action == "screen_assessed"
+        assert "no interrupt" in row.detail
+        assert "0.93" in row.detail
+
+    async def test_records_actual_intervention(self, config, store, fake_screenshot):
+        config.awareness.enabled = True
+        config.screenshot_enabled = True
+        activity = self._activity(store)
+        monitor = AwarenessMonitor(
+            config, lambda: fake_screenshot,
+            FakeAssessor(ScreenAssessment(True, 0.95, "rule breached")),
+            store, AsyncMock(), clock=FakeClock(), activity_store=activity,
+        )
+        await monitor._tick()
+        entries = activity.recent()
+        assessment = next(e for e in entries if e.action == "screen_assessed")
+        assert "intervened" in assessment.detail
+        assert any(e.action == "awareness_intervention" for e in entries)
+
+    async def test_records_assessment_failure(self, config, store, fake_screenshot):
+        config.awareness.enabled = True
+        config.screenshot_enabled = True
+        activity = self._activity(store)
+        assessor = FakeAssessor()
+        assessor.fail_once()
+        monitor = AwarenessMonitor(
+            config, lambda: fake_screenshot, assessor, store, AsyncMock(),
+            clock=FakeClock(), activity_store=activity,
+        )
+        await monitor._tick()
+        row = activity.recent()[-1]
+        assert row.action == "screen_assessment_failed"
+        assert "RuntimeError" in row.detail
+
+    async def test_disabled_does_not_log(self, config, store, fake_screenshot):
+        activity = self._activity(store)
+        monitor = AwarenessMonitor(
+            config, lambda: fake_screenshot, FakeAssessor(), store, AsyncMock(),
+            clock=FakeClock(), activity_store=activity,
+        )
+        await monitor._tick()
+        assert activity.recent() == []
+
+
 # ── PonyBrainAssessor (with fake brain) ───────────────────────────────
 
 
