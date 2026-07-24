@@ -495,6 +495,27 @@ class TestActivityTokenTools:
         assert "test_action" in result
         assert "hello" in result
 
+    def test_recent_activity_hides_awareness_bookkeeping(
+        self, make_brain_with_stores, stores
+    ):
+        """Screen assessments are Activity-panel bookkeeping. Handed to the chat
+        model they bury the rows the user asked about — and read as an answer."""
+        stores["activity"].record("task_completed", actor="user", detail="filed taxes")
+        for i in range(20):
+            stores["activity"].record(
+                "screen_assessed", actor="awareness",
+                detail=f"verdict=no interrupt, reason=The user is browsing Reddit ({i})",
+            )
+        stores["activity"].record(
+            "awareness_intervention", actor="awareness",
+            detail="Screen intervention: The user is browsing Reddit",
+        )
+        brain = make_brain_with_stores({})
+        result = brain._tool_recent_activity({})
+        assert "filed taxes" in result
+        assert "screen_assessed" not in result
+        assert "The user is browsing Reddit" not in result
+
     def test_recent_activity_limit(self, make_brain_with_stores, stores):
         for i in range(5):
             stores["activity"].record(f"action_{i}")

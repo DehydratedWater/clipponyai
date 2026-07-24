@@ -222,5 +222,14 @@ def test_message_history_roundtrip(store):
     ]
 
 
+def test_message_history_can_carry_the_source(store):
+    store.save_message("assistant", "still pending: taxes", "reminder")
+    store.save_message("user", "done", "desktop")
+    assert store.recent_messages(2, with_source=True) == [
+        {"role": "assistant", "content": "still pending: taxes", "source": "reminder"},
+        {"role": "user", "content": "done", "source": "desktop"},
+    ]
+
+
 def test_content_tokens_drop_stopwords():
     assert content_tokens("email the CEO about the holidays") == {"email", "ceo", "holidays"}

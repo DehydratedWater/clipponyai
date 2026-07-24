@@ -80,6 +80,48 @@ def _is_assistant_command(text: str) -> bool:
     normalized = " ".join(text.casefold().strip().split())
     return normalized.startswith(_ASSISTANT_COMMAND_PREFIXES)
 
+
+# Proactive messages — reminder nudges, awareness observations — are the pony
+# speaking into the one shared conversation, so they land in the chat lane's
+# history as ordinary assistant turns. Unbounded, they take the window over: an
+# awareness nudge every cooldown fills it within hours, and the fast model then
+# continues the pattern it sees most instead of answering — replying to "what
+# sport have I been doing?" with another screen observation. Keep only the last
+# few so "done!" still answers the nudge the pony actually sent, and drop the
+# rest. Measured on the local fast lane against a 40-message history that was
+# 21 nudges: parroted 11/15 unfiltered, 0/8 at this cap, 3/8 at three.
+PROACTIVE_SOURCES = frozenset({"reminder"})
+PROACTIVE_HISTORY_LIMIT = 2
+
+# The same text reaches the chat lane a second way: the awareness lane writes
+# an audit row for every screen assessment — dozens an hour, each one a
+# third-person observation ("The user is browsing Reddit, which falls under
+# …") — so recent_activity hands the model a wall of them and the real rows it
+# was asked about are nowhere in the answer. That log is the Activity panel's
+# bookkeeping, and the panel still shows every row.
+AWARENESS_AUDIT_ACTIONS = frozenset({
+    "screen_assessed", "screen_assessment_failed", "awareness_intervention",
+})
+
+
+def chat_history(
+    messages: list[dict], keep_proactive: int = PROACTIVE_HISTORY_LIMIT
+) -> list[dict]:
+    """Model-facing history: every real exchange, only the last few nudges.
+
+    Takes `recent_messages(..., with_source=True)` rows and returns plain
+    role/content dicts — the API rejects anything else.
+    """
+    proactive = [
+        i for i, m in enumerate(messages) if m.get("source") in PROACTIVE_SOURCES
+    ]
+    dropped = set(proactive[: max(0, len(proactive) - keep_proactive)])
+    return [
+        {"role": m["role"], "content": m["content"]}
+        for i, m in enumerate(messages)
+        if i not in dropped
+    ]
+
 # ── sensor schemas & prompts (small fast calls, tiny context) ─────────
 _SENSE_SCHEMA = {
     "type": "object",
@@ -840,7 +882,11 @@ class PonyBrain:
                 f"{text}\n\n[system note — real database state, trust this over "
                 f"your own assumptions:\n" + "\n".join(guard_notes) + "]"
             )
-        history = self.store.recent_messages(self.config.llm.history_limit)[:-1]
+        history = chat_history(
+            self.store.recent_messages(
+                self.config.llm.history_limit, with_source=True
+            )[:-1]
+        )
         # Inject onboarding context note into system prompt when active
         spec = self._spec(FAST)
         onboarding_note = self._onboarding_context_note()
@@ -1453,7 +1499,7 @@ class PonyBrain:
         if activity is None:
             return "Activity logging not available."
         limit = int(args.get("limit", 20))
-        entries = activity.recent(limit)
+        entries = activity.recent(limit, exclude_actions=AWARENESS_AUDIT_ACTIONS)
         if not entries:
             return "No recent activity."
         lines = ["Recent activity:"]
@@ -1543,7 +1589,7 @@ class PonyBrain:
         question = str(args.get("question", "")).strip()
         if not question:
             return "ERROR: question is required"
-        recent = self.store.recent_messages(10)
+        recent = chat_history(self.store.recent_messages(10, with_source=True))
         context = "\n".join(f"{m['role']}: {m['content']}" for m in recent)
         result = self._run(
             self._spec(SLOW),

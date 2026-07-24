@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -903,10 +904,25 @@ class ActivityStore:
                 ).fetchone()
             )
 
-    def recent(self, limit: int = 50) -> list[ActivityLog]:
+    def recent(
+        self, limit: int = 50, *, exclude_actions: Iterable[str] = ()
+    ) -> list[ActivityLog]:
+        """The newest entries, oldest first.
+
+        `exclude_actions` leaves whole action kinds out — the chat lane uses it
+        to skip the awareness lane's own bookkeeping, which the Activity panel
+        still shows in full.
+        """
+        excluded = tuple(exclude_actions)
+        where = ""
+        params: list[Any] = []
+        if excluded:
+            where = f" WHERE action NOT IN ({','.join('?' * len(excluded))})"
+            params.extend(excluded)
+        params.append(limit)
         with self._store._lock:
             rows = self._store._conn.execute(
-                "SELECT * FROM activity_log ORDER BY id DESC LIMIT ?", (limit,)
+                f"SELECT * FROM activity_log{where} ORDER BY id DESC LIMIT ?", params
             ).fetchall()
         return [self._row(r) for r in reversed(rows)]
 

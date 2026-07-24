@@ -428,11 +428,23 @@ class TaskStore:
             )
             self._conn.commit()
 
-    def recent_messages(self, limit: int = 40) -> list[dict]:
+    def recent_messages(self, limit: int = 40, *, with_source: bool = False) -> list[dict]:
+        """The newest `limit` messages, oldest first.
+
+        `with_source` adds the surface each message came in through
+        ('desktop', 'telegram', 'reminder') — the model-facing history
+        builder needs it, and the dicts sent to the API must not carry it.
+        """
         with self._lock:
             rows = self._conn.execute(
-                "SELECT role, content FROM messages ORDER BY id DESC LIMIT ?", (limit,)
+                "SELECT role, content, source FROM messages ORDER BY id DESC LIMIT ?",
+                (limit,),
             ).fetchall()
+        if with_source:
+            return [
+                {"role": r["role"], "content": r["content"], "source": r["source"]}
+                for r in reversed(rows)
+            ]
         return [{"role": r["role"], "content": r["content"]} for r in reversed(rows)]
 
     # ── key/value meta store ─────────────────────────────────────────

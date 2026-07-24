@@ -285,6 +285,14 @@ def test_activity_recent(stores):
     assert recent[1].action == "action_b"
 
 
+def test_activity_recent_can_exclude_actions(stores):
+    stores["activity"].record("routine_completed", detail="morning stretch")
+    stores["activity"].record("screen_assessed", detail="reason=The user is on Reddit")
+    stores["activity"].record("task_added", detail="taxes")
+    recent = stores["activity"].recent(exclude_actions={"screen_assessed"})
+    assert [e.action for e in recent] == ["routine_completed", "task_added"]
+
+
 def test_activity_200_retention(stores):
     """Insert 210 entries and verify exactly 200 remain (oldest pruned)."""
     for i in range(210):

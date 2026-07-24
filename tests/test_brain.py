@@ -35,6 +35,59 @@ async def test_history_flows_into_next_turn(make_brain, store):
     assert "first message" in joined and "second message" in joined
 
 
+# ── proactive messages in the chat history ────────────────────────────
+def test_chat_history_keeps_only_the_last_few_nudges():
+    from clipponyai.brain import chat_history
+
+    messages = [
+        {"role": "assistant", "content": f"nudge {i}", "source": "reminder"}
+        for i in range(5)
+    ]
+    messages.append({"role": "user", "content": "hello", "source": "desktop"})
+    kept = chat_history(messages, keep_proactive=2)
+    assert kept == [
+        {"role": "assistant", "content": "nudge 3"},
+        {"role": "assistant", "content": "nudge 4"},
+        {"role": "user", "content": "hello"},
+    ]
+
+
+def test_chat_history_never_drops_real_exchanges():
+    from clipponyai.brain import chat_history
+
+    messages = [
+        {"role": "user", "content": "a", "source": "desktop"},
+        {"role": "assistant", "content": "b", "source": "desktop"},
+        {"role": "user", "content": "c", "source": "telegram"},
+        {"role": "assistant", "content": "d", "source": "telegram"},
+    ]
+    assert chat_history(messages, keep_proactive=0) == [
+        {"role": m["role"], "content": m["content"]} for m in messages
+    ]
+
+
+async def test_awareness_nudges_do_not_flood_the_chat_lane(make_brain, store):
+    """A stream of proactive nudges must not crowd the real conversation out
+    of the window — that is what made the fast model answer questions with
+    another screen observation instead of a reply."""
+    from clipponyai.brain import PROACTIVE_HISTORY_LIMIT
+
+    store.save_message("user", "old question", "desktop")
+    store.save_message("assistant", "old answer", "desktop")
+    for i in range(8):
+        store.save_message("assistant", f"🐴 observation {i}", "reminder")
+
+    brain = make_brain({"pony": "an actual answer", "message-sensor": EMPTY_SENSE})
+    assert await brain.respond("what sport have I been doing?") == "an actual answer"
+
+    pony = [c for c in brain._test_clients if c.spec.agent_id == "pony"][-1]
+    sent = [m["content"] for m in pony.calls[0]["messages"]]
+    assert sum(1 for m in sent if "observation" in m) == PROACTIVE_HISTORY_LIMIT
+    assert "🐴 observation 7" in sent  # the most recent nudge is still answerable
+    assert "old question" in sent and "old answer" in sent
+    assert all("source" not in m for m in pony.calls[0]["messages"])
+
+
 # ── tool loop ─────────────────────────────────────────────────────────
 async def test_add_task_tool_with_llm_time_parsing(make_brain, store):
     brain = make_brain({
