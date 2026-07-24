@@ -35,7 +35,14 @@ Deliver = Callable[[str], Awaitable[None]]
 class Core:
     """Everything except pixels."""
 
-    def __init__(self, config: Config, *, screenshot_fn=None, client_factory=None) -> None:
+    def __init__(
+        self,
+        config: Config,
+        *,
+        screenshot_fn=None,
+        client_factory=None,
+        mcp_manager: MCPManager | None = None,
+    ) -> None:
         self.config = config
         self.store = TaskStore(db_path())
         # Accountability stores (routines, goals, activity, …)
@@ -62,7 +69,9 @@ class Core:
                 estimated=estimated,
             )
 
-        self.mcp_manager = MCPManager(config.mcp)
+        self.mcp_manager = (
+            mcp_manager if mcp_manager is not None else MCPManager(config.mcp)
+        )
         self.brain = PonyBrain(
             config, self.store, screenshot_fn=screenshot_fn,
             log_fn=lambda: read_recent_logs(config.logwatch),
@@ -227,6 +236,18 @@ class Core:
         await self._deliver_nudge(prompt)
 
     async def start(self) -> None:
+        enabled_servers = sum(
+            server.enabled for server in self.config.mcp.servers.values()
+        )
+        if self.config.mcp.enabled and enabled_servers:
+            log.info(
+                "MCP: %d servers configured, connecting in background...",
+                enabled_servers,
+            )
+        else:
+            log.info("MCP: disabled")
+        self.mcp_manager.start()
+
         if self.config.telegram.enabled:
             from .telegram_channel import TelegramChannel
 
@@ -250,6 +271,7 @@ class Core:
         await self.awareness_monitor.stop()
         for task in self._tasks:
             task.cancel()
+        self.mcp_manager.stop()
         for channel in self.channels:
             try:
                 await channel.stop()

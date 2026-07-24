@@ -9,6 +9,7 @@ clipponyai doctor       check config, provider keys, sprites, extras,
                         work-hours, logwatch, autostart, permissions
 clipponyai check-llm          smoke-test the active LLM provider (returns 0/1)
 clipponyai check-llm --vision  verify vision (image) capability
+clipponyai check-mcp          check configured MCP server connections and tools
 clipponyai autostart    enable/disable/check login autostart
 clipponyai install-desktop  install .desktop entry (Linux) / explain (macOS)
 """
@@ -329,6 +330,63 @@ def _cmd_check_llm(args) -> int:
         return 1
 
 
+def _cmd_check_mcp(args) -> int:
+    """Connect to configured MCP servers, report their status, and return 0/1."""
+
+    from .mcp import MCPManager, ServerStatus
+
+    config = Config.load()
+    if not config.mcp.enabled:
+        print("MCP disabled")
+        return 0
+    if not config.mcp.servers:
+        print("MCP disabled (no servers configured)")
+        return 0
+
+    if args.server is not None:
+        server = config.mcp.servers.get(args.server)
+        if server is None:
+            print(f"ERROR: MCP server {args.server!r} is not configured")
+            return 1
+        mcp_config = config.mcp.model_copy(
+            update={"servers": {args.server: server}}
+        )
+    else:
+        mcp_config = config.mcp
+
+    manager = MCPManager(mcp_config)
+    ready = False
+    try:
+        manager.start()
+        ready = manager.wait_ready(timeout=15)
+        states = manager.status()
+        tools_by_server: dict[str, list[str]] = {name: [] for name in states}
+        for tool in manager.tools():
+            tools_by_server.setdefault(tool.server, []).append(tool.namespaced_name)
+
+        print("NAME  STATE      TOOLS  INSTRUCTIONS  DETAILS")
+        all_connected = True
+        for name, state in sorted(states.items()):
+            status = state.status
+            message = state.last_error or ""
+            if not ready and status is ServerStatus.CONNECTING:
+                status = ServerStatus.ERROR
+                message = "timed out waiting 15s for initial connection"
+            enabled = mcp_config.servers[name].enabled
+            if enabled and status is not ServerStatus.CONNECTED:
+                all_connected = False
+
+            tool_names = ", ".join(sorted(tools_by_server.get(name, ()))) or "-"
+            details = message or tool_names
+            print(
+                f"{name}  {status.value.upper():<9}  {state.tool_count:<5}  "
+                f"{'yes' if state.instructions else 'no':<12}  {details}"
+            )
+        return 0 if all_connected else 1
+    finally:
+        manager.stop()
+
+
 def _check_llm_vision(active, provider_cfg, agent) -> int:
     """Send a synthetic image through the same structured VISION lane as awareness."""
     import base64
@@ -441,6 +499,8 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("doctor", help="check your setup")
     check_parser = sub.add_parser("check-llm", help="smoke-test the active LLM provider")
     check_parser.add_argument("--vision", action="store_true", help="test vision (image) capability")
+    mcp_parser = sub.add_parser("check-mcp", help="check configured MCP servers and tools")
+    mcp_parser.add_argument("--server", metavar="NAME", help="check only one configured server")
 
     # autostart subcommand
     auto_parser = sub.add_parser("autostart", help="enable/disable/check autostart")
@@ -463,6 +523,7 @@ def main(argv: list[str] | None = None) -> int:
         "tasks": _cmd_tasks,
         "doctor": _cmd_doctor,
         "check-llm": _cmd_check_llm,
+        "check-mcp": _cmd_check_mcp,
         "autostart": _cmd_autostart,
         "install-desktop": _cmd_install_desktop,
     }

@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import json
+import logging
 
 import pytest
 from fastmcp import Client, FastMCP
 from mcp.types import TextContent
 
-from clipponyai.config import MCPConfig, MCPServerConfig
+from clipponyai.config import Config, MCPConfig, MCPServerConfig
 from clipponyai.mcp import MCPManager, ServerStatus
 
 
@@ -235,3 +236,31 @@ def test_empty_manager_start_and_stop_is_a_noop():
     manager.stop()
     assert manager.wait_ready(timeout=0)
     assert manager.tools() == []
+
+
+async def test_core_starts_and_stops_mcp_manager_without_dangling_thread(
+    mcp_server,
+    caplog,
+):
+    from clipponyai.app import Core
+
+    config = Config()
+    config.mcp = MCPConfig(
+        enabled=True,
+        servers={"test": MCPServerConfig(url="https://unused.invalid/mcp")},
+    )
+    manager = MCPManager(
+        config.mcp,
+        client_factory=lambda _name, _config: Client(mcp_server),
+    )
+    core = Core(config, mcp_manager=manager)
+
+    with caplog.at_level(logging.INFO, logger="clipponyai.app"):
+        await core.start()
+        assert manager.wait_ready(timeout=2)
+        thread = manager._thread
+        await core.stop()
+
+    assert "MCP: 1 servers configured, connecting in background..." in caplog.messages
+    assert thread is not None
+    assert not thread.is_alive()

@@ -530,6 +530,15 @@ TOOL_SPECS: list[ToolSpec] = [
         description="Resume proactive context questions after they were silenced.",
         input_schema={"type": "object", "properties": {}},
     ),
+    # ── External service tools ─────────────────────────────────
+    ToolSpec(
+        name="mcp_status",
+        description=(
+            "List the external MCP services currently connected, their tools, "
+            "and any connection errors."
+        ),
+        input_schema={"type": "object", "properties": {}},
+    ),
 ]
 
 
@@ -907,6 +916,38 @@ class PonyBrain:
         except Exception as e:  # tool errors go back to the model, never raise
             log.exception("tool %s failed", name)
             return f"ERROR: {e}"
+
+    def _tool_mcp_status(self, args: dict) -> str:
+        if self._mcp is None:
+            return "No external services configured."
+        manager_config = getattr(self._mcp, "config", None)
+        if manager_config is not None and not manager_config.enabled:
+            return "No external services configured."
+
+        states = self._mcp.status()
+        if not states:
+            return "No external services configured."
+
+        tools_by_server: dict[str, list[str]] = {}
+        for tool in self._mcp.tools():
+            tools_by_server.setdefault(tool.server, []).append(tool.namespaced_name)
+
+        lines = []
+        for name, state in sorted(states.items()):
+            raw_status = state.status
+            status = getattr(raw_status, "value", str(raw_status)).upper()
+            tool_names = sorted(tools_by_server.get(name, ()))
+            if status == "CONNECTED":
+                tool_label = "tool" if len(tool_names) == 1 else "tools"
+                details = ", ".join(tool_names) if tool_names else "no tools"
+                lines.append(
+                    f"{name}: CONNECTED ({len(tool_names)} {tool_label}) — {details}"
+                )
+            elif state.last_error:
+                lines.append(f"{name}: {status} — {state.last_error}")
+            else:
+                lines.append(f"{name}: {status}")
+        return "\n".join(lines)
 
     # ── one-time task tools (with activity recording) ────────────────
 

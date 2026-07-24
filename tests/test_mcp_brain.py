@@ -14,6 +14,7 @@ EMPTY_SENSE = {"done_task_ids": [], "maybe_done_task_ids": [], "commitments": []
 @dataclass
 class _State:
     status: str
+    last_error: str | None = None
 
 
 class FakeMCPManager:
@@ -154,4 +155,24 @@ def test_no_mcp_manager_is_fully_inert(make_brain):
     assert brain._mcp_context_note() == ""
     assert brain._tool_runner("mcp__test__echo", {}) == (
         "ERROR: unknown tool mcp__test__echo"
+    )
+
+
+def test_mcp_status_tool_reports_connected_error_and_unconfigured_states(make_brain):
+    manager = FakeMCPManager()
+    brain = make_brain({}, mcp_manager=manager)
+
+    assert any(tool.name == "mcp_status" for tool in TOOL_SPECS)
+    connected = brain._tool_mcp_status({})
+    assert "test: CONNECTED (1 tool)" in connected
+    assert "mcp__test__echo" in connected
+
+    manager._tools.clear()
+    manager.status = lambda: {
+        "broken": _State("error", "connection refused"),
+    }
+    assert brain._tool_mcp_status({}) == "broken: ERROR — connection refused"
+
+    assert make_brain({})._tool_mcp_status({}) == (
+        "No external services configured."
     )
