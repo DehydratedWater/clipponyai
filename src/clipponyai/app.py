@@ -392,8 +392,8 @@ def run_gui(config: Config) -> int:
 
     core.nudge_hooks.append(nudge_gui)
 
-    # ── onboarding: fire initial prompt once, after hooks exist ─────
-    asyncio.ensure_future(core.start_onboarding_if_needed())
+    # Onboarding is scheduled after the startup greeting below.  Scheduling
+    # it here lets the greeting race with and overwrite the actual questions.
 
     # ── menu wiring ──────────────────────────────────────────────────
     def place_chat_near_pony() -> None:
@@ -524,5 +524,8 @@ def run_gui(config: Config) -> int:
         loop.run_until_complete(core.start())
         greeting = get_character(config.ui.character).name
         pony.say(f"✨ {greeting} reporting for duty! click me to chat.", msec=6000)
+        # Run after the greeting is shown so an unanswered first-run prompt is
+        # the final, pinned bubble instead of being immediately overwritten.
+        loop.create_task(core.start_onboarding_if_needed())
         loop.run_forever()
     return 0
