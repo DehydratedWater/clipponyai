@@ -18,6 +18,7 @@ classifiers = [
     "Topic :: Office/Business :: Scheduling",
 ]
 dependencies = [
+    "fastmcp>=3.4,<4",
     "open-agent-compiler>=1.16",
     "openai>=1.40",
     "pydantic>=2.7",

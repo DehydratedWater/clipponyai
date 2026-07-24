@@ -67,6 +67,13 @@ class TelegramChannel(Channel):
 
     # ── lifecycle ────────────────────────────────────────────────────
     async def start(self) -> None:
+        token = os.environ.get(self.config.token_env, "")
+        if not token:
+            raise RuntimeError(
+                f"telegram enabled but ${self.config.token_env} is not set — "
+                f"get a token from @BotFather and export it"
+            )
+
         try:
             from telegram import Update
             from telegram.ext import (
@@ -76,13 +83,6 @@ class TelegramChannel(Channel):
             raise RuntimeError(
                 "telegram extra not installed — pip install 'clipponyai[telegram]'"
             ) from e
-
-        token = os.environ.get(self.config.token_env, "")
-        if not token:
-            raise RuntimeError(
-                f"telegram enabled but ${self.config.token_env} is not set — "
-                f"get a token from @BotFather and export it"
-            )
 
         async def _guard(update: Update) -> bool:
             user = update.effective_user

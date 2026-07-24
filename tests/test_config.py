@@ -1,6 +1,7 @@
 import pytest
+from pydantic import ValidationError
 
-from clipponyai.config import Config, config_path
+from clipponyai.config import Config, MCPConfig, MCPServerConfig, config_path
 from clipponyai.providers import FAST, SLOW, VISION, make_preset, model_for
 
 
@@ -11,6 +12,7 @@ def test_defaults_are_private_and_sane(config):
     assert config.ui.character == "twilight"
     assert "openai" in config.llm.providers
     assert "ollama" in config.llm.providers  # local-GPU path out of the box
+    assert config.mcp.enabled is False
 
 
 def test_save_load_roundtrip(config):
@@ -66,3 +68,46 @@ def test_extra_body_serialized_as_json_string(config):
     preset = make_preset("vllm", cfg, FAST)
     assert isinstance(preset.provider_options["extra_body"], str)
     assert "enable_thinking" in preset.provider_options["extra_body"]
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {},
+        {"command": "server", "url": "https://example.test/mcp"},
+    ],
+)
+def test_mcp_server_requires_exactly_one_connection_target(kwargs):
+    with pytest.raises(ValidationError, match="exactly one"):
+        MCPServerConfig(**kwargs)
+
+
+def test_mcp_server_names_are_safe_tool_name_components():
+    with pytest.raises(ValidationError, match="server name"):
+        MCPConfig(
+            enabled=True,
+            servers={"not valid": MCPServerConfig(command="server")},
+        )
+
+
+def test_mcp_config_yaml_roundtrip_preserves_environment_placeholders(tmp_path):
+    path = tmp_path / "mcp-config.yaml"
+    config = Config(
+        mcp=MCPConfig(
+            enabled=True,
+            servers={
+                "private-data": MCPServerConfig(
+                    url="https://example.test/mcp",
+                    headers={"Authorization": "Bearer ${PRIVATE_DATA_TOKEN}"},
+                )
+            },
+        )
+    )
+
+    config.save(path)
+    loaded = Config.load(path)
+
+    assert loaded.mcp.servers["private-data"].headers == {
+        "Authorization": "Bearer ${PRIVATE_DATA_TOKEN}"
+    }
+    assert "${PRIVATE_DATA_TOKEN}" in path.read_text()

@@ -15,7 +15,7 @@ from pathlib import Path
 
 import yaml
 from platformdirs import user_config_dir, user_data_dir
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 APP_NAME = "clipponyai"
 
@@ -120,6 +120,49 @@ class LLMConfig(BaseModel):
                 f"providers: {sorted(self.providers)}"
             )
         return self.providers[self.active]
+
+
+class MCPServerConfig(BaseModel):
+    """Connection and tool-filter settings for one MCP server."""
+
+    type: str | None = None
+    command: str | None = None
+    args: list[str] = Field(default_factory=list)
+    env: dict[str, str] = Field(default_factory=dict)
+    cwd: str | None = None
+    url: str | None = None
+    headers: dict[str, str] = Field(default_factory=dict)
+    enabled: bool = True
+    tool_allow: list[str] = Field(default_factory=list)
+    tool_deny: list[str] = Field(default_factory=list)
+    timeout_seconds: float = 30.0
+
+    @model_validator(mode="after")
+    def _exactly_one_transport_target(self) -> "MCPServerConfig":
+        if (self.command is None) == (self.url is None):
+            raise ValueError("MCP server must define exactly one of 'command' or 'url'")
+        return self
+
+
+class MCPConfig(BaseModel):
+    """Generic MCP host configuration, disabled by default."""
+
+    enabled: bool = False
+    servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
+
+    @field_validator("servers")
+    @classmethod
+    def _valid_server_names(
+        cls, value: dict[str, MCPServerConfig]
+    ) -> dict[str, MCPServerConfig]:
+        import re
+
+        for name in value:
+            if re.fullmatch(r"[a-zA-Z0-9_-]+", name) is None:
+                raise ValueError(
+                    f"MCP server name {name!r} must contain only letters, numbers, '_' or '-'"
+                )
+        return value
 
 
 class WorkHoursConfig(BaseModel):
@@ -308,6 +351,7 @@ class ProactiveQuestionsConfig(BaseModel):
 class Config(BaseModel):
     ui: UIConfig = Field(default_factory=UIConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
+    mcp: MCPConfig = Field(default_factory=MCPConfig)
     reminders: RemindersConfig = Field(default_factory=RemindersConfig)
     telegram: TelegramConfig = Field(default_factory=TelegramConfig)
     logwatch: LogWatchConfig = Field(default_factory=LogWatchConfig)
