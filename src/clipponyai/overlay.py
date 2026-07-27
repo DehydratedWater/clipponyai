@@ -46,6 +46,7 @@ DRAG_REACTIONS = ["wheee! ✨", "*flails hooves*", "ooh, are we going somewhere?
 
 # Labels and durations (seconds) offered by the pony's right-click hide menu.
 TEMPORARY_HIDE_OPTIONS = (
+    ("1m", 60),
     ("15m", 15 * 60),
     ("30m", 30 * 60),
     ("45m", 45 * 60),

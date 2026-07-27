@@ -4,6 +4,7 @@ from clipponyai.overlay import TEMPORARY_HIDE_OPTIONS
 
 def test_temporary_hide_menu_options():
     assert TEMPORARY_HIDE_OPTIONS == (
+        ("1m", 60),
         ("15m", 900),
         ("30m", 1800),
         ("45m", 2700),

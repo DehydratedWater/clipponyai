@@ -541,8 +541,8 @@ def run_gui(config: Config) -> int:
     tray = QSystemTrayIcon(app_icon(), app)
     tray.setToolTip("clipponyai")
     tray_menu = QMenu()
-    act_show = tray_menu.addAction("🦄 show / hide pony")
-    act_show.triggered.connect(toggle_pony)
+    act_show = tray_menu.addAction("🦄 show pony now")
+    act_show.triggered.connect(show_pony)
     tray_menu.addAction("💬 chat", toggle_chat)
     tray_menu.addAction("📊 planner & activity", _show_dashboard)
     tray_menu.addAction("📋 tasks", _show_dashboard_tasks)
@@ -550,15 +550,14 @@ def run_gui(config: Config) -> int:
     tray_menu.addSeparator()
     tray_menu.addAction("✖ quit", quit_app)
     tray.setContextMenu(tray_menu)
-    # left-click on the tray also brings the pony back
+    # Left-click on the tray also brings the pony back. Always call show(): Qt
+    # registers the icon automatically if the tray host appears after startup.
     tray.activated.connect(
-        lambda reason: toggle_pony() if reason == QSystemTrayIcon.Trigger else None
+        lambda reason: show_pony() if reason == QSystemTrayIcon.Trigger else None
     )
-    if QSystemTrayIcon.isSystemTrayAvailable():
-        tray.show()
-    else:
-        log.warning("no system tray detected; hiding the pony is still reversible "
-                    "by clicking the tray area if one appears later")
+    tray.show()
+    if not QSystemTrayIcon.isSystemTrayAvailable():
+        log.warning("no system tray detected yet; the icon will register when one appears")
 
     hidden_for = temporary_hide_remaining_seconds(
         core.store.get_meta(PONY_HIDE_UNTIL_META)
