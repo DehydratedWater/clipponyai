@@ -44,6 +44,17 @@ QUIPS = [
 ]
 DRAG_REACTIONS = ["wheee! ✨", "*flails hooves*", "ooh, are we going somewhere?", "eep! 😳"]
 
+# Labels and durations (seconds) offered by the pony's right-click hide menu.
+TEMPORARY_HIDE_OPTIONS = (
+    ("15m", 15 * 60),
+    ("30m", 30 * 60),
+    ("45m", 45 * 60),
+    ("1h", 60 * 60),
+    ("2h", 2 * 60 * 60),
+    ("4h", 4 * 60 * 60),
+    ("6h", 6 * 60 * 60),
+)
+
 
 class PonyWindow(QWidget):
     clicked = Signal()               # open/close chat
@@ -54,7 +65,8 @@ class PonyWindow(QWidget):
     tasks_requested = Signal()
     dashboard_requested = Signal()
     settings_requested = Signal()
-    hide_requested = Signal()
+    hide_requested = Signal()  # retained for compatibility with older integrations
+    hide_for_requested = Signal(int)
     quit_requested = Signal()
 
     def __init__(self, character: str = "twilight", scale: float = 1.0,
@@ -316,7 +328,9 @@ class PonyWindow(QWidget):
         self._bounce_left = 16
 
     def say(self, text: str, msec: int | None = None) -> None:
-        self.bubble.show_message(text, self.anchor_point(), msec)
+        # A hidden pony should not leak reminder or onboarding bubbles onscreen.
+        if self.isVisible():
+            self.bubble.show_message(text, self.anchor_point(), msec)
 
     def moveEvent(self, e) -> None:
         super().moveEvent(e)
@@ -386,7 +400,12 @@ class PonyWindow(QWidget):
         menu.addAction("📊 planner & activity", self.dashboard_requested.emit)
         menu.addAction("📋 tasks", self.tasks_requested.emit)
         menu.addAction("⚙ settings", self.settings_requested.emit)
-        menu.addAction("🙈 hide", self.hide_requested.emit)
+        hide_menu = menu.addMenu("🙈 hide for…")
+        for label, seconds in TEMPORARY_HIDE_OPTIONS:
+            action = hide_menu.addAction(label)
+            action.triggered.connect(
+                lambda _=False, duration=seconds: self.hide_for_requested.emit(duration)
+            )
         menu.addSeparator()
         menu.addAction("✖ quit", self.quit_requested.emit)
         menu.exec(e.globalPos())

@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
+import time
 from collections.abc import Awaitable, Callable
 
 from .accountability import get_stores
@@ -29,6 +31,19 @@ log = logging.getLogger("clipponyai.app")
 
 Observer = Callable[[str, str, str], Awaitable[None]]  # (source, user_text, reply)
 Deliver = Callable[[str], Awaitable[None]]
+
+PONY_HIDE_UNTIL_META = "pony_hide_until"
+
+
+def temporary_hide_remaining_seconds(value: str | None, now: float | None = None) -> int:
+    """Return whole seconds left in a persisted temporary hide, or zero."""
+    if not value:
+        return 0
+    try:
+        remaining = float(value) - (time.time() if now is None else now)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, math.ceil(remaining))
 
 
 class Core:
@@ -326,6 +341,7 @@ def _open_settings(pony, core: Core, config: Config, chat=None) -> None:
 # ── Qt shell ──────────────────────────────────────────────────────────
 def run_gui(config: Config) -> int:
     import qasync
+    from PySide6.QtCore import QTimer
     from PySide6.QtWidgets import QApplication
 
     from .capture import take_screenshot
@@ -475,15 +491,40 @@ def run_gui(config: Config) -> int:
     pony.tasks_requested.connect(lambda: _show_dashboard_tasks())
     pony.settings_requested.connect(lambda: _open_settings(pony, core, config, chat))
     pony.dashboard_requested.connect(lambda: _show_dashboard())
-    pony.hide_requested.connect(lambda: toggle_pony())
+
+    hide_timer = QTimer(pony)
+    hide_timer.setSingleShot(True)
+
+    def _clear_temporary_hide() -> None:
+        hide_timer.stop()
+        core.store.set_meta(PONY_HIDE_UNTIL_META, "")
+
+    def show_pony() -> None:
+        """Show immediately, cancelling any temporary hide."""
+        _clear_temporary_hide()
+        pony.show()
+        pony.raise_()
+
+    def hide_pony_for(seconds: int) -> None:
+        """Hide until the duration expires, including across app restarts."""
+        if seconds <= 0:
+            return
+        core.store.set_meta(PONY_HIDE_UNTIL_META, str(time.time() + seconds))
+        pony.bubble.hide()
+        pony.hide()
+        hide_timer.start(seconds * 1000)
 
     def toggle_pony() -> None:
-        """Show or hide the pony — always recoverable via tray or menu."""
+        """Toggle from the tray; showing early cancels a temporary hide."""
         if pony.isVisible():
+            pony.bubble.hide()
             pony.hide()
         else:
-            pony.show()
-            pony.raise_()
+            show_pony()
+
+    hide_timer.timeout.connect(show_pony)
+    pony.hide_for_requested.connect(hide_pony_for)
+    pony.hide_requested.connect(toggle_pony)
 
     def quit_app() -> None:
         async def _shutdown() -> None:
@@ -519,11 +560,21 @@ def run_gui(config: Config) -> int:
         log.warning("no system tray detected; hiding the pony is still reversible "
                     "by clicking the tray area if one appears later")
 
-    pony.show()
+    hidden_for = temporary_hide_remaining_seconds(
+        core.store.get_meta(PONY_HIDE_UNTIL_META)
+    )
+    if hidden_for:
+        pony.hide()
+        hide_timer.start(hidden_for * 1000)
+    else:
+        _clear_temporary_hide()
+        pony.show()
+
     with loop:
         loop.run_until_complete(core.start())
-        greeting = get_character(config.ui.character).name
-        pony.say(f"✨ {greeting} reporting for duty! click me to chat.", msec=6000)
+        if pony.isVisible():
+            greeting = get_character(config.ui.character).name
+            pony.say(f"✨ {greeting} reporting for duty! click me to chat.", msec=6000)
         # Run after the greeting is shown so an unanswered first-run prompt is
         # the final, pinned bubble instead of being immediately overwritten.
         loop.create_task(core.start_onboarding_if_needed())
