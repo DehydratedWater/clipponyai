@@ -205,7 +205,7 @@ ui:
 screenshot_enabled: false   # privacy: SHE CANNOT SEE YOUR SCREEN unless true
 awareness:
   enabled: false              # proactive focus/distraction awareness
-  interval_seconds: 120       # how often to check (30–3600s)
+  interval_seconds: 300       # how often to check (30–3600s)
   cooldown_minutes: 30        # silence after alert (5–480m)
   minimum_confidence: 0.7     # skip low-confidence assessments
   focus_policy: "During work hours, interrupt if the user is on social media …"
@@ -283,7 +283,7 @@ be `true`:
 screenshot_enabled: true
 awareness:
   enabled: true
-  interval_seconds: 120       # seconds between checks (30–3600)
+  interval_seconds: 300       # seconds between checks (30–3600)
   cooldown_minutes: 30        # silence after each alert (5–480)
   minimum_confidence: 0.7     # skip assessments below this threshold (0.0–1.0)
   focus_policy: "During work hours, interrupt on social media. After hours, remind if working."

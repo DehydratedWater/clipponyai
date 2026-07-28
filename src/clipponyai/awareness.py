@@ -5,9 +5,9 @@ for distractions (social media during work hours) or after-hours work.
 Opt-in via two gates: screenshot_enabled AND awareness.enabled.
 
 Uses the existing screenshot function and PonyBrain's VISION lane for
-classification.  Structured JSON output (should_interrupt, confidence, reason)
-with strict parsing/validation.  Cooldown persisted in SQLite meta table so
-alerts never repeat within the cooldown window and survive restarts.
+classification. Structured JSON output records the observed activity and the
+interrupt decision. Cooldown is persisted in SQLite so alerts never repeat
+within the configured window, while observations continue during cooldown.
 
 Injectable dependencies: assessor (screen classification), clock, sleep,
 and delivery callback.
@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
+from .accountability import _json_dumps
 from .config import Config, WorkHoursConfig
 from .providers import VISION
 
@@ -30,29 +31,67 @@ log = logging.getLogger("clipponyai.awareness")
 
 _META_LAST_ALERT = "awareness_last_alert"
 _MIN_INTERVAL_SECONDS = 30
+OBSERVATION_CATEGORIES = frozenset(
+    {
+        "work",
+        "communication",
+        "entertainment",
+        "browsing",
+        "learning",
+        "idle",
+        "other",
+    }
+)
 
 # Structured output schema for the VISION lane assessment
 _ASSESSMENT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "should_interrupt": {
-            "type": "boolean",
-            "description": "True if the assistant should interrupt the user right now",
+        "activity": {
+            "type": "string",
+            "description": (
+                "What is being done on screen, one short neutral phrase, e.g. "
+                "'editing a Python test file' or 'scrolling a video feed'. "
+                "A sensor reading, not a message to anyone."
+            ),
         },
-        "confidence": {
-            "type": "number",
-            "description": "How confident the assessment is (0.0 to 1.0)",
+        "category": {
+            "type": "string",
+            "enum": [
+                "work",
+                "communication",
+                "entertainment",
+                "browsing",
+                "learning",
+                "idle",
+                "other",
+            ],
+            "description": "Best single label for the activity.",
         },
+        "app": {
+            "type": "string",
+            "description": "Name of the application in the foreground, or empty if unclear.",
+        },
+        "salient_text": {
+            "type": "string",
+            "description": (
+                "Up to 200 characters of the most informative visible text — an error "
+                "message, a document title, a subject line. Empty if nothing stands out."
+            ),
+        },
+        "should_interrupt": {"type": "boolean"},
+        "confidence": {"type": "number"},
         "reason": {
             "type": "string",
-            "description": "One short sentence explaining why (or why not)",
+            "description": "One short sentence explaining why (or why not).",
         },
     },
-    "required": ["should_interrupt", "confidence", "reason"],
+    "required": ["activity", "category", "should_interrupt", "confidence", "reason"],
 }
 
 _ASSESSMENT_PROMPT_TEMPLATE = """\
-You look at a screenshot of the user's screen and decide whether to interrupt them.
+You are a screen sensor. You look at a screenshot of the user's screen, report what is
+on it, and decide whether it warrants interrupting them.
 
 Current local time: {current_time}
 Current work-hours status: {work_hours_status}
@@ -61,6 +100,15 @@ Focus policy (verbatim): {focus_policy}
 Pending tasks overview:
 {task_overview}
 
+Always report what you see, in the activity, category, app and salient_text fields:
+- activity: one short neutral phrase for what is being done.
+- category: the single best label from the allowed list.
+- app: the foreground application's name if you can tell.
+- salient_text: the most informative text visible, or empty.
+These are sensor readings. Write them as plain factual descriptions. They are stored in a
+log and read by other software — they are not a message to anybody, so do not address
+anyone and do not give advice in them.
+
 Decision rules:
 - The focus policy is the only reason to interrupt. Do not invent reasons of your own.
 - A clause that is conditional ("during work hours", "in the evening", ...) fires only when
@@ -68,8 +116,9 @@ Decision rules:
   does not hold, or you cannot tell, that clause does not apply — do not assume it applies.
 - If no clause clearly applies to what is on screen right now, set should_interrupt to false.
 
-Look at this screenshot. Based on the focus policy, the current time, work-hours status, and
-pending tasks, decide whether to interrupt the user. Return strictly as JSON."""
+Look at this screenshot. Report what you see, then based on the focus policy, the current
+time, work-hours status, and pending tasks, decide whether to interrupt the user. Return
+strictly as JSON."""
 
 
 # ── data types ────────────────────────────────────────────────────────
@@ -79,9 +128,13 @@ pending tasks, decide whether to interrupt the user. Return strictly as JSON."""
 class ScreenAssessment:
     """Parsed and validated result from a VISION lane screen classification."""
 
+    activity: str
+    category: str
     should_interrupt: bool
     confidence: float
     reason: str
+    app: str = ""
+    salient_text: str = ""
 
 
 # ── assessment parsing / validation ───────────────────────────────────
@@ -112,10 +165,32 @@ def parse_assessment(result: Any) -> ScreenAssessment:
     if not isinstance(reason, str):
         raise ValueError(f"reason must be string, got {type(reason).__name__}")
 
+    activity = structured.get("activity")
+    if not isinstance(activity, str) or not activity.strip():
+        raise ValueError("activity must be a non-empty string")
+
+    category = structured.get("category")
+    if not isinstance(category, str):
+        raise ValueError(f"category must be string, got {type(category).__name__}")
+    if category not in OBSERVATION_CATEGORIES:
+        category = "other"
+
+    app = structured.get("app", "")
+    if not isinstance(app, str):
+        raise ValueError(f"app must be string, got {type(app).__name__}")
+
+    salient_text = structured.get("salient_text", "")
+    if not isinstance(salient_text, str):
+        raise ValueError(f"salient_text must be string, got {type(salient_text).__name__}")
+
     return ScreenAssessment(
+        activity=activity,
+        category=category,
         should_interrupt=bool(si),
         confidence=float(conf),
         reason=reason,
+        app=app[:120],
+        salient_text=salient_text[:200],
     )
 
 
@@ -173,13 +248,15 @@ class PonyBrainAssessor:
         )
         result = self._brain._run(
             self._brain._spec(VISION),
-            [{
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
-                ],
-            }],
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+                    ],
+                }
+            ],
             output_schema=_ASSESSMENT_SCHEMA,
         )
         return parse_assessment(result)
@@ -212,6 +289,7 @@ class AwarenessMonitor:
         deliver: Any,  # Delivery: Callable[[str], Awaitable[None]]
         clock: Any | None = None,  # Clock protocol
         activity_store: Any | None = None,  # ActivityStore for logging
+        observation_store: Any | None = None,  # ObservationStore for sensor readings
     ) -> None:
         self.config = config
         self.screenshot_fn = screenshot_fn
@@ -220,6 +298,7 @@ class AwarenessMonitor:
         self.deliver = deliver
         self.clock = clock if clock is not None else _RealClock()
         self.activity_store = activity_store
+        self.observation_store = observation_store
         self._task: asyncio.Task | None = None
         self._stop = asyncio.Event()
 
@@ -295,10 +374,6 @@ class AwarenessMonitor:
         if not self.config.awareness.enabled or not self.config.screenshot_enabled:
             return
 
-        # Cooldown check (persisted across restarts)
-        if self._in_cooldown(now):
-            return
-
         # Capture and model inference may block; keep both off the GUI event loop.
         png = await asyncio.to_thread(self.screenshot_fn)
         if not png:
@@ -327,15 +402,18 @@ class AwarenessMonitor:
             self._record_failure(self._safe_error_class(exc), str(exc))
             return
 
+        # Cooldown suppresses speech, not perception.
+        if self._in_cooldown(now):
+            self._record_assessment(assessment, now=now, intervened=False)
+            return
+
         should_intervene = (
             assessment.should_interrupt
             and assessment.confidence >= self.config.awareness.minimum_confidence
         )
 
         if not should_intervene:
-            # Record every successful assessment so the Activity panel proves
-            # awareness ran even when it correctly chose not to interrupt.
-            self._record_assessment(assessment, intervened=False)
+            self._record_assessment(assessment, now=now, intervened=False)
             if assessment.confidence < self.config.awareness.minimum_confidence:
                 log.debug(
                     "awareness: confidence %.2f below threshold %.2f, skipping",
@@ -352,7 +430,7 @@ class AwarenessMonitor:
             assessment.confidence,
         )
         await self.deliver(message)
-        self._record_assessment(assessment, intervened=True)
+        self._record_assessment(assessment, now=now, intervened=True)
 
         # Record cooldown timestamp
         self.store.set_meta(_META_LAST_ALERT, str(now.timestamp()))
@@ -360,24 +438,36 @@ class AwarenessMonitor:
         # Record intervention activity (separate from the assessment entry above)
         if self.activity_store is not None:
             self.activity_store.record(
-                "awareness_intervention", actor="awareness",
+                "awareness_intervention",
+                actor="awareness",
                 detail=f"Screen intervention: {assessment.reason}",
             )
 
     # ── audit helpers ────────────────────────────────────────────────
 
     def _record_assessment(
-        self, assessment: ScreenAssessment, *, intervened: bool
+        self, assessment: ScreenAssessment, *, now: datetime, intervened: bool
     ) -> None:
-        """Log a screen assessment result without screenshot data or secrets."""
-        if self.activity_store is None:
+        """Record structured sensor output without screenshot data."""
+        if self.observation_store is None:
             return
-        verdict = "intervened" if intervened else "no interrupt"
-        detail = (
-            f"verdict={verdict}, confidence={assessment.confidence:.2f}, "
-            f"reason={assessment.reason[:120]}"
+        self.observation_store.record(
+            started_at=now,
+            ended_at=now,
+            source="vision",
+            app=assessment.app,
+            category=assessment.category,
+            activity=assessment.activity,
+            detail=assessment.salient_text,
+            confidence=assessment.confidence,
+            payload=_json_dumps(
+                {
+                    "should_interrupt": assessment.should_interrupt,
+                    "reason": assessment.reason,
+                    "intervened": intervened,
+                }
+            ),
         )
-        self.activity_store.record("screen_assessed", actor="awareness", detail=detail)
 
     def _record_failure(self, error_class: str, error_message: str) -> None:
         """Log a screen_assessment_failed activity entry with safe error info."""

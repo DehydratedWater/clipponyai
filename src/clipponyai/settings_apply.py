@@ -18,6 +18,7 @@ from .characters import CHARACTERS, FORMS
 def _default_prov() -> ProviderConfig:
     return ProviderConfig()
 
+
 ALL_CHARACTERS = [*CHARACTERS, *FORMS]
 CHARACTER_SLUGS = [c.slug for c in ALL_CHARACTERS]
 
@@ -92,7 +93,7 @@ class SettingsForm:
 
     # awareness (proactive focus/distraction)
     awareness_enabled: bool = False
-    awareness_interval_seconds: int = 120
+    awareness_interval_seconds: int = 300
     awareness_cooldown_minutes: int = 30
     awareness_minimum_confidence: float = 0.7
     awareness_focus_policy: str = ""
@@ -107,6 +108,7 @@ class SettingsForm:
 
 
 # ── read from Config ───────────────────────────────────────────────────
+
 
 def read_form(config: Config, *, autostart_enabled: bool = False) -> SettingsForm:
     """Build a ``SettingsForm`` from the current ``Config``.
@@ -143,11 +145,19 @@ def read_form(config: Config, *, autostart_enabled: bool = False) -> SettingsFor
         logwatch_max_lines=lw.max_lines_per_file,
         logwatch_max_chars=lw.max_total_chars,
         active_provider=config.llm.active,
-        provider_base_url=config.llm.providers.get(config.llm.active, _default_prov()).base_url or "",
-        provider_api_key_env=config.llm.providers.get(config.llm.active, _default_prov()).api_key_env or "",
+        provider_base_url=config.llm.providers.get(config.llm.active, _default_prov()).base_url
+        or "",
+        provider_api_key_env=config.llm.providers.get(
+            config.llm.active, _default_prov()
+        ).api_key_env
+        or "",
         provider_fast_model=config.llm.providers.get(config.llm.active, _default_prov()).fast_model,
-        provider_slow_model=config.llm.providers.get(config.llm.active, _default_prov()).slow_model or "",
-        provider_vision_model=config.llm.providers.get(config.llm.active, _default_prov()).vision_model or "",
+        provider_slow_model=config.llm.providers.get(config.llm.active, _default_prov()).slow_model
+        or "",
+        provider_vision_model=config.llm.providers.get(
+            config.llm.active, _default_prov()
+        ).vision_model
+        or "",
         autostart_enabled=autostart_enabled,
         awareness_enabled=aw.enabled,
         awareness_interval_seconds=aw.interval_seconds,
@@ -165,6 +175,7 @@ def read_form(config: Config, *, autostart_enabled: bool = False) -> SettingsFor
 
 # ── validation ─────────────────────────────────────────────────────────
 
+
 class ValidationError(Exception):
     """Raised when the form fails validation. ``errors`` is a list of messages."""
 
@@ -173,8 +184,12 @@ class ValidationError(Exception):
         super().__init__("; ".join(errors))
 
 
-def validate(form: SettingsForm, *, available_providers: list[str],
-             available_characters: list[str] | None = None) -> list[str]:
+def validate(
+    form: SettingsForm,
+    *,
+    available_providers: list[str],
+    available_characters: list[str] | None = None,
+) -> list[str]:
     """Return a list of human-readable error strings (empty = valid).
 
     Validates ranges, formats and cross-field constraints.  Does NOT modify
@@ -275,6 +290,7 @@ def validate(form: SettingsForm, *, available_providers: list[str],
 
 
 # ── apply back to Config ───────────────────────────────────────────────
+
 
 def apply_to_config(form: SettingsForm, config: Config) -> None:
     """Mutate ``config`` in place from a validated ``SettingsForm``.

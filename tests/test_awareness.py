@@ -16,6 +16,7 @@ No live model, no real screenshots, no real services.
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
@@ -86,20 +87,21 @@ class FakeAssessor:
     """Scriptable assessor returning a fixed ScreenAssessment."""
 
     def __init__(self, assessment: ScreenAssessment | None = None):
-        self.assessment = assessment or ScreenAssessment(
-            should_interrupt=False, confidence=0.9, reason="all clear"
-        )
+        self.assessment = assessment or make_assessment()
         self.calls = []
         self._fail_next = False
 
-    def assess(self, screenshot_bytes, *, current_time, work_hours_status, task_overview,
-               focus_policy):
-        self.calls.append({
-            "current_time": current_time,
-            "work_hours_status": work_hours_status,
-            "task_overview": task_overview,
-            "focus_policy": focus_policy,
-        })
+    def assess(
+        self, screenshot_bytes, *, current_time, work_hours_status, task_overview, focus_policy
+    ):
+        self.calls.append(
+            {
+                "current_time": current_time,
+                "work_hours_status": work_hours_status,
+                "task_overview": task_overview,
+                "focus_policy": focus_policy,
+            }
+        )
         if self._fail_next:
             self._fail_next = False
             raise RuntimeError("assessor down")
@@ -109,10 +111,43 @@ class FakeAssessor:
         self._fail_next = True
 
 
+def make_assessment(
+    should_interrupt=False,
+    confidence=0.9,
+    reason="all clear",
+    *,
+    activity="editing a document",
+    category="work",
+    app="Editor",
+    salient_text="",
+):
+    return ScreenAssessment(
+        activity=activity,
+        category=category,
+        should_interrupt=should_interrupt,
+        confidence=confidence,
+        reason=reason,
+        app=app,
+        salient_text=salient_text,
+    )
+
+
 # ── parse_assessment: strict JSON/type/range validation ───────────────
 
 
 class TestParseAssessment:
+    @staticmethod
+    def _structured(**overrides):
+        value = {
+            "activity": "editing a Python test file",
+            "category": "work",
+            "should_interrupt": False,
+            "confidence": 0.9,
+            "reason": "focused work",
+        }
+        value.update(overrides)
+        return value
+
     def _result(self, structured):
         r = MagicMock()
         r.structured = structured
@@ -120,19 +155,19 @@ class TestParseAssessment:
         return r
 
     def test_valid_interrupt(self):
-        r = self._result({"should_interrupt": True, "confidence": 0.95, "reason": "TikTok"})
+        r = self._result(self._structured(should_interrupt=True, confidence=0.95, reason="TikTok"))
         a = parse_assessment(r)
         assert a.should_interrupt is True
         assert a.confidence == 0.95
         assert a.reason == "TikTok"
 
     def test_valid_no_interrupt(self):
-        r = self._result({"should_interrupt": False, "confidence": 0.8, "reason": "working"})
+        r = self._result(self._structured(confidence=0.8, reason="working"))
         a = parse_assessment(r)
         assert a.should_interrupt is False
 
     def test_confidence_int_coerced_to_float(self):
-        r = self._result({"should_interrupt": False, "confidence": 1, "reason": "ok"})
+        r = self._result(self._structured(confidence=1, reason="ok"))
         a = parse_assessment(r)
         assert isinstance(a.confidence, float)
         assert a.confidence == 1.0
@@ -163,7 +198,7 @@ class TestParseAssessment:
             parse_assessment(r)
 
     def test_reason_wrong_type(self):
-        r = self._result({"should_interrupt": True, "confidence": 0.9, "reason": 123})
+        r = self._result(self._structured(should_interrupt=True, reason=123))
         with pytest.raises(ValueError, match="reason"):
             parse_assessment(r)
 
@@ -183,14 +218,41 @@ class TestParseAssessment:
             parse_assessment(r)
 
     def test_boundary_confidence_zero(self):
-        r = self._result({"should_interrupt": False, "confidence": 0.0, "reason": "guessing"})
+        r = self._result(self._structured(confidence=0.0, reason="guessing"))
         a = parse_assessment(r)
         assert a.confidence == 0.0
 
     def test_boundary_confidence_one(self):
-        r = self._result({"should_interrupt": True, "confidence": 1.0, "reason": "certain"})
+        r = self._result(self._structured(should_interrupt=True, confidence=1.0, reason="certain"))
         a = parse_assessment(r)
         assert a.confidence == 1.0
+
+    def test_missing_activity_rejected(self):
+        value = self._structured()
+        del value["activity"]
+        with pytest.raises(ValueError, match="activity"):
+            parse_assessment(self._result(value))
+
+    def test_unknown_category_coerced_to_other(self):
+        a = parse_assessment(self._result(self._structured(category="coding")))
+        assert a.category == "other"
+
+    def test_optional_text_fields_default_empty(self):
+        a = parse_assessment(self._result(self._structured()))
+        assert a.app == ""
+        assert a.salient_text == ""
+
+    def test_text_fields_are_truncated(self):
+        a = parse_assessment(
+            self._result(
+                self._structured(
+                    app="a" * 130,
+                    salient_text="s" * 210,
+                )
+            )
+        )
+        assert a.app == "a" * 120
+        assert a.salient_text == "s" * 200
 
 
 # ── AwarenessConfig validation ────────────────────────────────────────
@@ -200,7 +262,7 @@ class TestAwarenessConfig:
     def test_defaults_off(self):
         c = AwarenessConfig()
         assert c.enabled is False
-        assert c.interval_seconds == 120
+        assert c.interval_seconds == 300
         assert c.cooldown_minutes == 30
         assert c.minimum_confidence == 0.7
 
@@ -256,8 +318,12 @@ class TestOptInGates:
         config.screenshot_enabled = False
         assessor = FakeAssessor()
         monitor = AwarenessMonitor(
-            config, lambda: fake_screenshot, assessor, store,
-            AsyncMock(), clock=FakeClock(),
+            config,
+            lambda: fake_screenshot,
+            assessor,
+            store,
+            AsyncMock(),
+            clock=FakeClock(),
         )
         await monitor.start()
         assert monitor._task is None  # never launched
@@ -268,8 +334,12 @@ class TestOptInGates:
         config.screenshot_enabled = False
         assessor = FakeAssessor()
         monitor = AwarenessMonitor(
-            config, lambda: fake_screenshot, assessor, store,
-            AsyncMock(), clock=FakeClock(),
+            config,
+            lambda: fake_screenshot,
+            assessor,
+            store,
+            AsyncMock(),
+            clock=FakeClock(),
         )
         await monitor.start()
         assert monitor._task is None
@@ -280,8 +350,12 @@ class TestOptInGates:
         config.screenshot_enabled = True
         assessor = FakeAssessor()
         monitor = AwarenessMonitor(
-            config, lambda: fake_screenshot, assessor, store,
-            AsyncMock(), clock=FakeClock(),
+            config,
+            lambda: fake_screenshot,
+            assessor,
+            store,
+            AsyncMock(),
+            clock=FakeClock(),
         )
         await monitor.start()
         assert monitor._task is None
@@ -292,8 +366,12 @@ class TestOptInGates:
         config.screenshot_enabled = True
         assessor = FakeAssessor()
         monitor = AwarenessMonitor(
-            config, None, assessor, store,
-            AsyncMock(), clock=FakeClock(),
+            config,
+            None,
+            assessor,
+            store,
+            AsyncMock(),
+            clock=FakeClock(),
         )
         await monitor.start()
         assert monitor._task is None
@@ -304,8 +382,12 @@ class TestOptInGates:
         config.screenshot_enabled = True
         assessor = FakeAssessor()
         monitor = AwarenessMonitor(
-            config, lambda: fake_screenshot, assessor, store,
-            AsyncMock(), clock=FakeClock(),
+            config,
+            lambda: fake_screenshot,
+            assessor,
+            store,
+            AsyncMock(),
+            clock=FakeClock(),
         )
         await monitor.start()
         assert monitor._task is not None
@@ -321,13 +403,17 @@ class TestCooldownPersistence:
         config.screenshot_enabled = True
         config.awareness.cooldown_minutes = 30
         clock = FakeClock(datetime(2026, 7, 22, 10, 0))
-        assessment = ScreenAssessment(True, 0.95, "TikTok detected")
+        assessment = make_assessment(True, 0.95, "TikTok detected")
         assessor = FakeAssessor(assessment)
         deliver_mock = AsyncMock()
 
         monitor = AwarenessMonitor(
-            config, lambda: fake_screenshot, assessor, store,
-            deliver_mock, clock=clock,
+            config,
+            lambda: fake_screenshot,
+            assessor,
+            store,
+            deliver_mock,
+            clock=clock,
         )
         await monitor.start()
 
@@ -347,14 +433,18 @@ class TestCooldownPersistence:
         config.screenshot_enabled = True
         config.awareness.cooldown_minutes = 30
         clock = FakeClock(datetime(2026, 7, 22, 10, 0))
-        assessment = ScreenAssessment(True, 0.95, "TikTok")
+        assessment = make_assessment(True, 0.95, "TikTok")
         assessor = FakeAssessor(assessment)
         deliver_mock = AsyncMock()
 
         # First monitor instance
         monitor1 = AwarenessMonitor(
-            config, lambda: fake_screenshot, assessor, store,
-            deliver_mock, clock=clock,
+            config,
+            lambda: fake_screenshot,
+            assessor,
+            store,
+            deliver_mock,
+            clock=clock,
         )
         await monitor1.start()
         await monitor1._tick()  # fires
@@ -365,8 +455,12 @@ class TestCooldownPersistence:
         assessor2 = FakeAssessor(assessment)
         deliver_mock2 = AsyncMock()
         monitor2 = AwarenessMonitor(
-            config, lambda: fake_screenshot, assessor2, store,
-            deliver_mock2, clock=clock,
+            config,
+            lambda: fake_screenshot,
+            assessor2,
+            store,
+            deliver_mock2,
+            clock=clock,
         )
         await monitor2.start()
         await monitor2._tick()  # still in cooldown
@@ -378,13 +472,17 @@ class TestCooldownPersistence:
         config.screenshot_enabled = True
         config.awareness.cooldown_minutes = 15
         clock = FakeClock(datetime(2026, 7, 22, 10, 0))
-        assessment = ScreenAssessment(True, 0.95, "TikTok")
+        assessment = make_assessment(True, 0.95, "TikTok")
         assessor = FakeAssessor(assessment)
         deliver_mock = AsyncMock()
 
         monitor = AwarenessMonitor(
-            config, lambda: fake_screenshot, assessor, store,
-            deliver_mock, clock=clock,
+            config,
+            lambda: fake_screenshot,
+            assessor,
+            store,
+            deliver_mock,
+            clock=clock,
         )
         await monitor.start()
         await monitor._tick()  # first alert
@@ -401,13 +499,17 @@ class TestCooldownPersistence:
         config.awareness.enabled = True
         config.screenshot_enabled = True
         clock = FakeClock(datetime(2026, 7, 22, 10, 0))
-        assessment = ScreenAssessment(True, 0.95, "test")
+        assessment = make_assessment(True, 0.95, "test")
         assessor = FakeAssessor(assessment)
         deliver_mock = AsyncMock()
 
         monitor = AwarenessMonitor(
-            config, lambda: fake_screenshot, assessor, store,
-            deliver_mock, clock=clock,
+            config,
+            lambda: fake_screenshot,
+            assessor,
+            store,
+            deliver_mock,
+            clock=clock,
         )
         await monitor.start()
         await monitor._tick()
@@ -418,6 +520,36 @@ class TestCooldownPersistence:
         assert float(meta_val) == clock.now().timestamp()
 
         await monitor.stop()
+
+    async def test_cooldown_still_assesses_and_records(self, config, store, fake_screenshot):
+        from clipponyai.accountability import get_stores
+
+        config.awareness.enabled = True
+        config.screenshot_enabled = True
+        clock = FakeClock(datetime(2026, 7, 22, 10, 0))
+        store.set_meta(_META_LAST_ALERT, str(clock.now().timestamp()))
+        assessor = FakeAssessor(make_assessment(True, 0.95, "TikTok"))
+        deliver_mock = AsyncMock()
+        observations = get_stores(store)["observations"]
+        monitor = AwarenessMonitor(
+            config,
+            lambda: fake_screenshot,
+            assessor,
+            store,
+            deliver_mock,
+            clock=clock,
+            observation_store=observations,
+        )
+
+        previous_meta = store.get_meta(_META_LAST_ALERT)
+        await monitor._tick()
+
+        assert len(assessor.calls) == 1
+        row = observations.latest(source="vision")
+        assert row is not None
+        assert row.activity == "editing a document"
+        assert deliver_mock.call_count == 0
+        assert store.get_meta(_META_LAST_ALERT) == previous_meta
 
 
 # ── work-hours context ────────────────────────────────────────────────
@@ -433,13 +565,17 @@ class TestWorkHoursContext:
         config.reminders.work_hours.weekdays = [0, 1, 2, 3, 4]
 
         clock = FakeClock(datetime(2026, 7, 22, 10, 0))  # Wednesday 10:00
-        assessment = ScreenAssessment(False, 0.9, "focused")
+        assessment = make_assessment(False, 0.9, "focused")
         assessor = FakeAssessor(assessment)
         deliver_mock = AsyncMock()
 
         monitor = AwarenessMonitor(
-            config, lambda: fake_screenshot, assessor, store,
-            deliver_mock, clock=clock,
+            config,
+            lambda: fake_screenshot,
+            assessor,
+            store,
+            deliver_mock,
+            clock=clock,
         )
         await monitor.start()
         await monitor._tick()
@@ -457,13 +593,17 @@ class TestWorkHoursContext:
         config.reminders.work_hours.weekdays = [0, 1, 2, 3, 4]
 
         clock = FakeClock(datetime(2026, 7, 22, 20, 0))  # Wednesday 20:00
-        assessment = ScreenAssessment(False, 0.9, "after hours")
+        assessment = make_assessment(False, 0.9, "after hours")
         assessor = FakeAssessor(assessment)
         deliver_mock = AsyncMock()
 
         monitor = AwarenessMonitor(
-            config, lambda: fake_screenshot, assessor, store,
-            deliver_mock, clock=clock,
+            config,
+            lambda: fake_screenshot,
+            assessor,
+            store,
+            deliver_mock,
+            clock=clock,
         )
         await monitor.start()
         await monitor._tick()
@@ -478,13 +618,17 @@ class TestWorkHoursContext:
         config.reminders.work_hours.enabled = False
 
         clock = FakeClock()
-        assessment = ScreenAssessment(False, 0.9, "ok")
+        assessment = make_assessment(False, 0.9, "ok")
         assessor = FakeAssessor(assessment)
         deliver_mock = AsyncMock()
 
         monitor = AwarenessMonitor(
-            config, lambda: fake_screenshot, assessor, store,
-            deliver_mock, clock=clock,
+            config,
+            lambda: fake_screenshot,
+            assessor,
+            store,
+            deliver_mock,
+            clock=clock,
         )
         await monitor.start()
         await monitor._tick()
@@ -492,9 +636,7 @@ class TestWorkHoursContext:
 
         assert "not configured" in assessor.calls[0]["work_hours_status"].lower()
 
-    async def test_unconfigured_work_hours_marked_unverified(
-        self, config, store, fake_screenshot
-    ):
+    async def test_unconfigured_work_hours_marked_unverified(self, config, store, fake_screenshot):
         """Unconfigured work hours must read as *unknown*, not as a blank.
 
         Regression: the old wording ("Work hours not configured.") let the model
@@ -506,11 +648,15 @@ class TestWorkHoursContext:
         config.reminders.work_hours.enabled = False
 
         clock = FakeClock(datetime(2026, 7, 24, 20, 54))  # Friday evening
-        assessor = FakeAssessor(ScreenAssessment(False, 0.9, "ok"))
+        assessor = FakeAssessor(make_assessment(False, 0.9, "ok"))
 
         monitor = AwarenessMonitor(
-            config, lambda: fake_screenshot, assessor, store,
-            AsyncMock(), clock=clock,
+            config,
+            lambda: fake_screenshot,
+            assessor,
+            store,
+            AsyncMock(),
+            clock=clock,
         )
         await monitor.start()
         await monitor._tick()
@@ -529,11 +675,15 @@ class TestWorkHoursContext:
         config.screenshot_enabled = True
 
         clock = FakeClock(datetime(2026, 7, 24, 20, 54))  # Friday 20:54
-        assessor = FakeAssessor(ScreenAssessment(False, 0.9, "ok"))
+        assessor = FakeAssessor(make_assessment(False, 0.9, "ok"))
 
         monitor = AwarenessMonitor(
-            config, lambda: fake_screenshot, assessor, store,
-            AsyncMock(), clock=clock,
+            config,
+            lambda: fake_screenshot,
+            assessor,
+            store,
+            AsyncMock(),
+            clock=clock,
         )
         await monitor.start()
         await monitor._tick()
@@ -549,13 +699,17 @@ class TestWorkHoursContext:
         store.add("finish report", deadline=datetime(2026, 7, 22, 12, 0))
 
         clock = FakeClock()
-        assessment = ScreenAssessment(False, 0.9, "ok")
+        assessment = make_assessment(False, 0.9, "ok")
         assessor = FakeAssessor(assessment)
         deliver_mock = AsyncMock()
 
         monitor = AwarenessMonitor(
-            config, lambda: fake_screenshot, assessor, store,
-            deliver_mock, clock=clock,
+            config,
+            lambda: fake_screenshot,
+            assessor,
+            store,
+            deliver_mock,
+            clock=clock,
         )
         await monitor.start()
         await monitor._tick()
@@ -569,13 +723,17 @@ class TestWorkHoursContext:
         config.awareness.focus_policy = "never interrupt for YouTube"
 
         clock = FakeClock()
-        assessment = ScreenAssessment(False, 0.9, "ok")
+        assessment = make_assessment(False, 0.9, "ok")
         assessor = FakeAssessor(assessment)
         deliver_mock = AsyncMock()
 
         monitor = AwarenessMonitor(
-            config, lambda: fake_screenshot, assessor, store,
-            deliver_mock, clock=clock,
+            config,
+            lambda: fake_screenshot,
+            assessor,
+            store,
+            deliver_mock,
+            clock=clock,
         )
         await monitor.start()
         await monitor._tick()
@@ -591,13 +749,17 @@ class TestFailureHandling:
     async def test_screenshot_failure_skips_silently(self, config, store):
         config.awareness.enabled = True
         config.screenshot_enabled = True
-        assessment = ScreenAssessment(True, 0.95, "TikTok")
+        assessment = make_assessment(True, 0.95, "TikTok")
         assessor = FakeAssessor(assessment)
         deliver_mock = AsyncMock()
 
         monitor = AwarenessMonitor(
-            config, lambda: None,  # always fails
-            assessor, store, deliver_mock, clock=FakeClock(),
+            config,
+            lambda: None,  # always fails
+            assessor,
+            store,
+            deliver_mock,
+            clock=FakeClock(),
         )
         await monitor.start()
         await monitor._tick()
@@ -608,13 +770,17 @@ class TestFailureHandling:
     async def test_assessor_failure_skips_silently(self, config, store, fake_screenshot):
         config.awareness.enabled = True
         config.screenshot_enabled = True
-        assessor = FakeAssessor(ScreenAssessment(True, 0.95, "TikTok"))
+        assessor = FakeAssessor(make_assessment(True, 0.95, "TikTok"))
         assessor.fail_once()
         deliver_mock = AsyncMock()
 
         monitor = AwarenessMonitor(
-            config, lambda: fake_screenshot, assessor, store,
-            deliver_mock, clock=FakeClock(),
+            config,
+            lambda: fake_screenshot,
+            assessor,
+            store,
+            deliver_mock,
+            clock=FakeClock(),
         )
         await monitor.start()
         await monitor._tick()
@@ -625,13 +791,17 @@ class TestFailureHandling:
         config.awareness.enabled = True
         config.screenshot_enabled = True
         config.awareness.minimum_confidence = 0.8
-        assessment = ScreenAssessment(True, 0.5, "maybe TikTok")
+        assessment = make_assessment(True, 0.5, "maybe TikTok")
         assessor = FakeAssessor(assessment)
         deliver_mock = AsyncMock()
 
         monitor = AwarenessMonitor(
-            config, lambda: fake_screenshot, assessor, store,
-            deliver_mock, clock=FakeClock(),
+            config,
+            lambda: fake_screenshot,
+            assessor,
+            store,
+            deliver_mock,
+            clock=FakeClock(),
         )
         await monitor.start()
         await monitor._tick()
@@ -641,13 +811,17 @@ class TestFailureHandling:
     async def test_no_interrupt_skips(self, config, store, fake_screenshot):
         config.awareness.enabled = True
         config.screenshot_enabled = True
-        assessment = ScreenAssessment(False, 0.95, "user is focused")
+        assessment = make_assessment(False, 0.95, "user is focused")
         assessor = FakeAssessor(assessment)
         deliver_mock = AsyncMock()
 
         monitor = AwarenessMonitor(
-            config, lambda: fake_screenshot, assessor, store,
-            deliver_mock, clock=FakeClock(),
+            config,
+            lambda: fake_screenshot,
+            assessor,
+            store,
+            deliver_mock,
+            clock=FakeClock(),
         )
         await monitor.start()
         await monitor._tick()
@@ -659,13 +833,17 @@ class TestFailureHandling:
         config.screenshot_enabled = True
         config.awareness.cooldown_minutes = 30
         store.set_meta(_META_LAST_ALERT, "not_a_number")
-        assessment = ScreenAssessment(True, 0.95, "TikTok")
+        assessment = make_assessment(True, 0.95, "TikTok")
         assessor = FakeAssessor(assessment)
         deliver_mock = AsyncMock()
 
         monitor = AwarenessMonitor(
-            config, lambda: fake_screenshot, assessor, store,
-            deliver_mock, clock=FakeClock(),
+            config,
+            lambda: fake_screenshot,
+            assessor,
+            store,
+            deliver_mock,
+            clock=FakeClock(),
         )
         await monitor.start()
         # Should not crash despite corrupted meta
@@ -683,8 +861,12 @@ class TestLifecycle:
         config.awareness.enabled = True
         config.screenshot_enabled = True
         monitor = AwarenessMonitor(
-            config, lambda: fake_screenshot, FakeAssessor(), store,
-            AsyncMock(), clock=FakeClock(),
+            config,
+            lambda: fake_screenshot,
+            FakeAssessor(),
+            store,
+            AsyncMock(),
+            clock=FakeClock(),
         )
         await monitor.start()
         assert monitor._task is not None
@@ -695,8 +877,12 @@ class TestLifecycle:
         config.awareness.enabled = True
         config.screenshot_enabled = True
         monitor = AwarenessMonitor(
-            config, lambda: fake_screenshot, FakeAssessor(), store,
-            AsyncMock(), clock=FakeClock(),
+            config,
+            lambda: fake_screenshot,
+            FakeAssessor(),
+            store,
+            AsyncMock(),
+            clock=FakeClock(),
         )
         await monitor.start()
         await monitor.stop()
@@ -706,7 +892,12 @@ class TestLifecycle:
         config.awareness.enabled = False
         config.screenshot_enabled = False
         monitor = AwarenessMonitor(
-            config, None, FakeAssessor(), store, AsyncMock(), clock=FakeClock(),
+            config,
+            None,
+            FakeAssessor(),
+            store,
+            AsyncMock(),
+            clock=FakeClock(),
         )
         await monitor.start()
         await monitor.start()  # no-op
@@ -716,13 +907,17 @@ class TestLifecycle:
         """If awareness is disabled mid-loop, the next tick is a no-op."""
         config.awareness.enabled = True
         config.screenshot_enabled = True
-        assessment = ScreenAssessment(True, 0.95, "TikTok")
+        assessment = make_assessment(True, 0.95, "TikTok")
         assessor = FakeAssessor(assessment)
         deliver_mock = AsyncMock()
 
         monitor = AwarenessMonitor(
-            config, lambda: fake_screenshot, assessor, store,
-            deliver_mock, clock=FakeClock(),
+            config,
+            lambda: fake_screenshot,
+            assessor,
+            store,
+            deliver_mock,
+            clock=FakeClock(),
         )
         await monitor.start()
         await monitor._tick()  # fires
@@ -738,13 +933,17 @@ class TestLifecycle:
     async def test_interrupt_message_format(self, config, store, fake_screenshot):
         config.awareness.enabled = True
         config.screenshot_enabled = True
-        assessment = ScreenAssessment(True, 0.95, "You're on TikTok during work hours")
+        assessment = make_assessment(True, 0.95, "You're on TikTok during work hours")
         assessor = FakeAssessor(assessment)
         deliver_mock = AsyncMock()
 
         monitor = AwarenessMonitor(
-            config, lambda: fake_screenshot, assessor, store,
-            deliver_mock, clock=FakeClock(),
+            config,
+            lambda: fake_screenshot,
+            assessor,
+            store,
+            deliver_mock,
+            clock=FakeClock(),
         )
         await monitor.start()
         await monitor._tick()
@@ -759,50 +958,77 @@ class TestLifecycle:
 
 
 class TestAwarenessActivityAudit:
-    def _activity(self, store):
+    def _stores(self, store):
         from clipponyai.accountability import get_stores
 
-        return get_stores(store)["activity"]
+        return get_stores(store)
 
     async def test_records_non_intervention(self, config, store, fake_screenshot):
         config.awareness.enabled = True
         config.screenshot_enabled = True
-        activity = self._activity(store)
+        stores = self._stores(store)
         monitor = AwarenessMonitor(
-            config, lambda: fake_screenshot,
-            FakeAssessor(ScreenAssessment(False, 0.93, "focused work")),
-            store, AsyncMock(), clock=FakeClock(), activity_store=activity,
+            config,
+            lambda: fake_screenshot,
+            FakeAssessor(
+                make_assessment(
+                    False,
+                    0.93,
+                    "focused work",
+                    activity="editing awareness tests",
+                    salient_text="test_records_non_intervention",
+                )
+            ),
+            store,
+            AsyncMock(),
+            clock=FakeClock(),
+            activity_store=stores["activity"],
+            observation_store=stores["observations"],
         )
         await monitor._tick()
-        row = activity.recent()[-1]
-        assert row.action == "screen_assessed"
-        assert "no interrupt" in row.detail
-        assert "0.93" in row.detail
+        row = stores["observations"].latest(source="vision")
+        assert row is not None
+        assert row.activity == "editing awareness tests"
+        assert row.detail == "test_records_non_intervention"
+        assert row.confidence == 0.93
+        assert json.loads(row.payload)["intervened"] is False
+        assert stores["activity"].recent() == []
 
     async def test_records_actual_intervention(self, config, store, fake_screenshot):
         config.awareness.enabled = True
         config.screenshot_enabled = True
-        activity = self._activity(store)
+        stores = self._stores(store)
         monitor = AwarenessMonitor(
-            config, lambda: fake_screenshot,
-            FakeAssessor(ScreenAssessment(True, 0.95, "rule breached")),
-            store, AsyncMock(), clock=FakeClock(), activity_store=activity,
+            config,
+            lambda: fake_screenshot,
+            FakeAssessor(make_assessment(True, 0.95, "rule breached")),
+            store,
+            AsyncMock(),
+            clock=FakeClock(),
+            activity_store=stores["activity"],
+            observation_store=stores["observations"],
         )
         await monitor._tick()
-        entries = activity.recent()
-        assessment = next(e for e in entries if e.action == "screen_assessed")
-        assert "intervened" in assessment.detail
+        entries = stores["activity"].recent()
         assert any(e.action == "awareness_intervention" for e in entries)
+        observation = stores["observations"].latest(source="vision")
+        assert observation is not None
+        assert json.loads(observation.payload)["intervened"] is True
 
     async def test_records_assessment_failure(self, config, store, fake_screenshot):
         config.awareness.enabled = True
         config.screenshot_enabled = True
-        activity = self._activity(store)
+        activity = self._stores(store)["activity"]
         assessor = FakeAssessor()
         assessor.fail_once()
         monitor = AwarenessMonitor(
-            config, lambda: fake_screenshot, assessor, store, AsyncMock(),
-            clock=FakeClock(), activity_store=activity,
+            config,
+            lambda: fake_screenshot,
+            assessor,
+            store,
+            AsyncMock(),
+            clock=FakeClock(),
+            activity_store=activity,
         )
         await monitor._tick()
         row = activity.recent()[-1]
@@ -810,13 +1036,20 @@ class TestAwarenessActivityAudit:
         assert "RuntimeError" in row.detail
 
     async def test_disabled_does_not_log(self, config, store, fake_screenshot):
-        activity = self._activity(store)
+        stores = self._stores(store)
         monitor = AwarenessMonitor(
-            config, lambda: fake_screenshot, FakeAssessor(), store, AsyncMock(),
-            clock=FakeClock(), activity_store=activity,
+            config,
+            lambda: fake_screenshot,
+            FakeAssessor(),
+            store,
+            AsyncMock(),
+            clock=FakeClock(),
+            activity_store=stores["activity"],
+            observation_store=stores["observations"],
         )
         await monitor._tick()
-        assert activity.recent() == []
+        assert stores["activity"].recent() == []
+        assert stores["observations"].latest() is None
 
 
 # ── PonyBrainAssessor (with fake brain) ───────────────────────────────
@@ -831,9 +1064,20 @@ class TestPonyBrainAssessor:
         def factory(spec):
             from conftest import FakeClient
 
-            client = FakeClient(spec, {
-                "pony-vision": {"should_interrupt": True, "confidence": 0.9, "reason": "TikTok"},
-            })
+            client = FakeClient(
+                spec,
+                {
+                    "pony-vision": {
+                        "activity": "scrolling a video feed",
+                        "category": "entertainment",
+                        "app": "Browser",
+                        "salient_text": "TikTok",
+                        "should_interrupt": True,
+                        "confidence": 0.9,
+                        "reason": "TikTok",
+                    },
+                },
+            )
             clients.append(client)
             return client
 
@@ -851,6 +1095,8 @@ class TestPonyBrainAssessor:
         assert result.should_interrupt is True
         assert result.confidence == 0.9
         assert result.reason == "TikTok"
+        assert result.activity == "scrolling a video feed"
+        assert result.category == "entertainment"
 
         # Verify the vision lane received an image
         vision_clients = [c for c in clients if c.spec.agent_id == "pony-vision"]
@@ -861,11 +1107,7 @@ class TestPonyBrainAssessor:
             for message in call["messages"]
             if isinstance(message.get("content"), list)
         ]
-        assert any(
-            part.get("type") == "image_url"
-            for content in rich_messages
-            for part in content
-        )
+        assert any(part.get("type") == "image_url" for content in rich_messages for part in content)
 
     def test_assessor_rejects_invalid_output(self, config, store):
         from clipponyai.brain import PonyBrain
@@ -873,9 +1115,12 @@ class TestPonyBrainAssessor:
         def factory(spec):
             from conftest import FakeClient
 
-            return FakeClient(spec, {
-                "pony-vision": {"bad": "output"},  # missing required fields
-            })
+            return FakeClient(
+                spec,
+                {
+                    "pony-vision": {"bad": "output"},  # missing required fields
+                },
+            )
 
         brain = PonyBrain(config, store, client_factory=factory)
         assessor = PonyBrainAssessor(brain)
@@ -898,9 +1143,18 @@ class TestPonyBrainAssessor:
         def factory(spec):
             from conftest import FakeClient
 
-            client = FakeClient(spec, {
-                "pony-vision": {"should_interrupt": False, "confidence": 0.9, "reason": "ok"},
-            })
+            client = FakeClient(
+                spec,
+                {
+                    "pony-vision": {
+                        "activity": "editing code",
+                        "category": "work",
+                        "should_interrupt": False,
+                        "confidence": 0.9,
+                        "reason": "ok",
+                    },
+                },
+            )
             clients.append(client)
             return client
 
@@ -922,6 +1176,8 @@ class TestPonyBrainAssessor:
         )
         assert "2026-07-24 20:54 (Friday)" in text
         assert "do not assume it applies" in text.lower()
+        assert "screen sensor" in text.lower()
+        assert "sensor readings" in text.lower()
 
 
 # ── settings roundtrip ────────────────────────────────────────────────
@@ -935,7 +1191,7 @@ class TestSettingsRoundtrip:
         config = Config()
         form = read_form(config)
         assert form.awareness_enabled is False
-        assert form.awareness_interval_seconds == 120
+        assert form.awareness_interval_seconds == 300
         assert form.awareness_cooldown_minutes == 30
         assert form.awareness_minimum_confidence == 0.7
         assert "social media" in form.awareness_focus_policy.lower()
@@ -1029,6 +1285,7 @@ class TestSettingsRoundtrip:
         old = SettingsForm()
         new = SettingsForm(awareness_enabled=True)
         from clipponyai.settings_apply import detect_changes
+
         assert "awareness_enabled" in detect_changes(old, new)
 
     def test_form_modify_apply_save_awareness(self, tmp_path):
@@ -1060,29 +1317,57 @@ class TestSettingsRoundtrip:
 
 class TestInWorkHours:
     def test_inside_work_hours(self):
-        wh = type("WH", (), {
-            "enabled": True, "start": "09:00", "end": "17:00", "weekdays": [0, 1, 2, 3, 4],
-        })()
+        wh = type(
+            "WH",
+            (),
+            {
+                "enabled": True,
+                "start": "09:00",
+                "end": "17:00",
+                "weekdays": [0, 1, 2, 3, 4],
+            },
+        )()
         now = datetime(2026, 7, 22, 12, 0)  # Wednesday noon
         assert in_work_hours(now, wh)
 
     def test_outside_work_hours(self):
-        wh = type("WH", (), {
-            "enabled": True, "start": "09:00", "end": "17:00", "weekdays": [0, 1, 2, 3, 4],
-        })()
+        wh = type(
+            "WH",
+            (),
+            {
+                "enabled": True,
+                "start": "09:00",
+                "end": "17:00",
+                "weekdays": [0, 1, 2, 3, 4],
+            },
+        )()
         now = datetime(2026, 7, 22, 20, 0)  # Wednesday evening
         assert not in_work_hours(now, wh)
 
     def test_weekend_outside(self):
-        wh = type("WH", (), {
-            "enabled": True, "start": "09:00", "end": "17:00", "weekdays": [0, 1, 2, 3, 4],
-        })()
+        wh = type(
+            "WH",
+            (),
+            {
+                "enabled": True,
+                "start": "09:00",
+                "end": "17:00",
+                "weekdays": [0, 1, 2, 3, 4],
+            },
+        )()
         now = datetime(2026, 7, 25, 12, 0)  # Saturday
         assert not in_work_hours(now, wh)
 
     def test_disabled(self):
-        wh = type("WH", (), {
-            "enabled": False, "start": "09:00", "end": "17:00", "weekdays": [0, 1, 2, 3, 4],
-        })()
+        wh = type(
+            "WH",
+            (),
+            {
+                "enabled": False,
+                "start": "09:00",
+                "end": "17:00",
+                "weekdays": [0, 1, 2, 3, 4],
+            },
+        )()
         now = datetime(2026, 7, 22, 12, 0)
         assert not in_work_hours(now, wh)

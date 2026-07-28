@@ -278,7 +278,7 @@ class AwarenessConfig(BaseModel):
     """
 
     enabled: bool = False
-    interval_seconds: int = 120
+    interval_seconds: int = 300
     cooldown_minutes: int = 30
     minimum_confidence: float = 0.7
     focus_policy: str = (

@@ -135,6 +135,7 @@ class Core:
             self.store,
             self._deliver_nudge,
             activity_store=self.accountability["activity"],
+            observation_store=observation_store,
         )
         self.observation_recorder = ObservationRecorder(config, observation_store)
         self.channels: list[Channel] = []

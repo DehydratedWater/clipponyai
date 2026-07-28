@@ -71,7 +71,10 @@ def _live_client(_live_spec):
 def test_live_basic_chat(_live_spec, _live_client):
     """The endpoint returns a non-empty text response to a simple prompt."""
     result = run_interactive(
-        _live_spec, "Say pong in one word.", client=_live_client, max_tool_rounds=0,
+        _live_spec,
+        "Say pong in one word.",
+        client=_live_client,
+        max_tool_rounds=0,
     )
     assert not result.error, f"run error: {result.error}"
     text = (result.output_text or "").strip()
@@ -135,3 +138,5 @@ def test_live_multimodal_awareness_path(_live_provider_cfg, tmp_path):
     assert assessment.should_interrupt is False
     assert assessment.confidence >= 0.8
     assert assessment.reason
+    assert assessment.activity
+    assert assessment.category

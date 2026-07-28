@@ -54,7 +54,7 @@ class TestReadForm:
         assert form.active_provider == "openai"
         assert form.autostart_enabled is False
         assert form.awareness_enabled is False
-        assert form.awareness_interval_seconds == 120
+        assert form.awareness_interval_seconds == 300
         assert form.awareness_cooldown_minutes == 30
         assert form.awareness_minimum_confidence == 0.7
         assert "social media" in form.awareness_focus_policy
@@ -243,6 +243,7 @@ class TestApplyToConfig:
 
 
 # ── validate ───────────────────────────────────────────────────────────
+
 
 class TestValidate:
     def _providers(self):
