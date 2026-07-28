@@ -17,6 +17,8 @@ def test_defaults_are_private_and_sane(config):
     assert config.telegram.enabled is False
     assert config.telegram.allowed_user_ids == []  # answers nobody
     assert config.ui.character == "twilight"
+    assert config.ui.stay_put is False  # she roams unless asked to hold still
+    assert config.ui.anchor_x is None and config.ui.anchor_y is None
     assert "openai" in config.llm.providers
     assert "ollama" in config.llm.providers  # local-GPU path out of the box
     assert config.mcp.enabled is False

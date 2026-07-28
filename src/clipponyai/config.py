@@ -266,6 +266,12 @@ class UIConfig(BaseModel):
     scale: float = 1.0
     idle_wander: bool = True
     attention_seconds: int = 30  # how long a reminder chases the cursor
+    # Pin her: she never changes position on her own — no idle walking, no
+    # galloping to the cursor during a nudge. Dragging is the only thing that
+    # moves her, and the spot she is dropped at is remembered below.
+    stay_put: bool = False
+    anchor_x: int | None = None  # set automatically when dragged while pinned
+    anchor_y: int | None = None
 
 
 class AwarenessConfig(BaseModel):

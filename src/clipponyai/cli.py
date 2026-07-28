@@ -149,6 +149,9 @@ def _cmd_doctor(_args) -> int:
     check(
         f"screen peeking: {'ON' if config.screenshot_enabled else 'off (private by default)'}", True
     )
+    check(
+        f"stay put: {'ON (pinned)' if config.ui.stay_put else 'off (she wanders and chases)'}", True
+    )
 
     # Work-hours state
     wh = config.reminders.work_hours

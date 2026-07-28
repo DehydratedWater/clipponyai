@@ -33,6 +33,7 @@ class TestReadForm:
         assert form.character == "twilight"
         assert form.pony_scale == 1.0
         assert form.pony_idle_wander is True
+        assert form.pony_stay_put is False
         assert form.pony_attention_seconds == 30
         assert form.reminders_enabled is True
         assert form.reminders_check_interval == 60
@@ -78,6 +79,7 @@ class TestReadForm:
         config.ui.character = "rainbow-dash"
         config.ui.scale = 1.5
         config.ui.idle_wander = False
+        config.ui.stay_put = True
         config.ui.attention_seconds = 60
         config.reminders.enabled = False
         config.reminders.check_interval_seconds = 120
@@ -121,6 +123,7 @@ class TestReadForm:
         assert form.character == "rainbow-dash"
         assert form.pony_scale == 1.5
         assert form.pony_idle_wander is False
+        assert form.pony_stay_put is True
         assert form.pony_attention_seconds == 60
         assert form.reminders_enabled is False
         assert form.reminders_check_interval == 120
@@ -200,6 +203,7 @@ class TestApplyToConfig:
         config.ui.character = "fluttershy"
         config.ui.scale = 1.3
         config.ui.idle_wander = False
+        config.ui.stay_put = True
         config.ui.attention_seconds = 45
         config.reminders.enabled = False
         config.reminders.check_interval_seconds = 90
@@ -245,6 +249,7 @@ class TestApplyToConfig:
         assert config.ui.character == "fluttershy"
         assert config.ui.scale == 1.3
         assert config.ui.idle_wander is False
+        assert config.ui.stay_put is True
         assert config.ui.attention_seconds == 45
         assert config.reminders.enabled is False
         assert config.reminders.check_interval_seconds == 90
@@ -288,6 +293,19 @@ class TestApplyToConfig:
         form.work_hours_weekdays = [3, 1, 3, 1, 0]
         apply_to_config(form, config)
         assert config.reminders.work_hours.weekdays == [0, 1, 3]
+
+    def test_never_clobbers_the_remembered_anchor(self):
+        """anchor_x/anchor_y are set by dragging her, not by the dialog, so they
+        are deliberately absent from SettingsForm — a settings save must leave a
+        remembered spot alone."""
+        config = Config()
+        config.ui.stay_put = True
+        config.ui.anchor_x, config.ui.anchor_y = 1200, 640
+        form = read_form(config)
+        form.pony_scale = 1.4  # an unrelated edit, as the dialog would make
+        apply_to_config(form, config)
+        assert (config.ui.anchor_x, config.ui.anchor_y) == (1200, 640)
+        assert config.ui.stay_put is True
 
     def test_does_not_save_to_disk(self, tmp_path):
         """apply_to_config mutates in place but does NOT call config.save()."""
@@ -679,6 +697,8 @@ class TestFullRoundTrip:
         config.ui.character = "fluttershy"
         config.ui.scale = 1.25
         config.ui.idle_wander = False
+        config.ui.stay_put = True
+        config.ui.anchor_x, config.ui.anchor_y = 240, 900
         config.ui.attention_seconds = 45
         config.reminders.enabled = False
         config.reminders.check_interval_seconds = 120
@@ -720,6 +740,10 @@ class TestFullRoundTrip:
         assert loaded.ui.character == "fluttershy"
         assert loaded.ui.scale == 1.25
         assert loaded.ui.idle_wander is False
+        assert loaded.ui.stay_put is True
+        # the remembered spot survives a save/load cycle even though the settings
+        # dialog never touches it
+        assert (loaded.ui.anchor_x, loaded.ui.anchor_y) == (240, 900)
         assert loaded.ui.attention_seconds == 45
         assert loaded.reminders.enabled is False
         assert loaded.reminders.check_interval_seconds == 120

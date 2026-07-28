@@ -181,6 +181,16 @@ class Core:
         self.config.llm.active = name
         self.config.save()
 
+    def set_stay_put(self, on: bool, anchor: tuple[int, int] | None = None) -> None:
+        self.config.ui.stay_put = on
+        if anchor is not None:
+            self.config.ui.anchor_x, self.config.ui.anchor_y = anchor
+        self.config.save()
+
+    def set_anchor(self, x: int, y: int) -> None:
+        self.config.ui.anchor_x, self.config.ui.anchor_y = x, y
+        self.config.save()
+
     def set_screenshot_enabled(self, on: bool) -> None:
         self.config.screenshot_enabled = on
         self.config.save()
@@ -357,6 +367,11 @@ def _open_settings(pony, core: Core, config: Config, chat=None) -> None:
         """Apply live settings after every successful save."""
         pony.screenshot_enabled = config.screenshot_enabled
         pony.set_idle_wander(config.ui.idle_wander)
+        # Pinning from the dialog means the same thing as pinning from the menu:
+        # remember wherever she is standing right now.
+        if config.ui.stay_put and not pony.stay_put:
+            core.set_stay_put(True, anchor=(pony.x(), pony.y()))
+        pony.set_stay_put(config.ui.stay_put)
         if pony.character != config.ui.character:
             note = core.set_character(config.ui.character)
             pony.set_character(config.ui.character)
@@ -395,6 +410,7 @@ def _open_settings(pony, core: Core, config: Config, chat=None) -> None:
 # ── Qt shell ──────────────────────────────────────────────────────────
 def run_gui(config: Config) -> int:
     import qasync
+    from PySide6.QtCore import QPoint
     from PySide6.QtWidgets import QApplication
 
     from .capture import take_screenshot
@@ -410,10 +426,17 @@ def run_gui(config: Config) -> int:
     asyncio.set_event_loop(loop)
 
     core = Core(config, screenshot_fn=take_screenshot)
+    saved_anchor = (
+        QPoint(config.ui.anchor_x, config.ui.anchor_y)
+        if config.ui.anchor_x is not None and config.ui.anchor_y is not None
+        else None
+    )
     pony = PonyWindow(
         character=config.ui.character,
         scale=config.ui.scale,
         idle_wander=config.ui.idle_wander,
+        stay_put=config.ui.stay_put,
+        anchor=saved_anchor,
     )
     pony.provider_names = core.brain.provider_names()
     pony.active_provider = core.brain.provider_name
@@ -521,6 +544,20 @@ def run_gui(config: Config) -> int:
             msec=4000,
         )
 
+    def on_stay_put(on: bool) -> None:
+        # Pinning means "remember *this* spot", so capture it on the way in.
+        core.set_stay_put(on, anchor=(pony.x(), pony.y()) if on else None)
+        pony.set_stay_put(on)
+        pony.say(
+            "📌 staying right here" if on else "🐎 free to roam again",
+            msec=4000,
+        )
+
+    def on_anchor_changed(x: int, y: int) -> None:
+        # Only worth remembering while pinned — otherwise she wanders off it anyway.
+        if config.ui.stay_put:
+            core.set_anchor(x, y)
+
     # ── dashboard (lazy singleton) ──────────────────────────────────
     _dashboard = None
 
@@ -546,6 +583,8 @@ def run_gui(config: Config) -> int:
     pony.character_selected.connect(on_character)
     pony.provider_selected.connect(on_provider)
     pony.screenshot_toggled.connect(on_peek)
+    pony.stay_put_toggled.connect(on_stay_put)
+    pony.anchor_changed.connect(on_anchor_changed)
     pony.tasks_requested.connect(lambda: _show_dashboard_tasks())
     pony.settings_requested.connect(lambda: _open_settings(pony, core, config, chat))
     pony.dashboard_requested.connect(lambda: _show_dashboard())

@@ -2,6 +2,11 @@
 walks where she's told, talks in bubbles, chases your cursor when a reminder
 really must be seen, and accepts clicks and drags.
 
+On a single-monitor desk all that travelling is in the way, so `stay_put` pins
+her: she keeps the spot you drag her to and never moves on her own. It gates
+`walk_to`, which every autonomous movement path goes through. Pinning changes
+where she is, not how expressive she is — she still reads, quips, and hops.
+
 Adapted from the original clippony client, with characters and forms unified:
 picking Rainbow Dash or Clippy from the menu switches both the sprites AND
 the personality (the brain rebuilds the persona prompt).
@@ -51,6 +56,8 @@ class PonyWindow(QWidget):
     character_selected = Signal(str)
     provider_selected = Signal(str)
     screenshot_toggled = Signal(bool)
+    stay_put_toggled = Signal(bool)
+    anchor_changed = Signal(int, int)  # she was dragged and dropped here
     tasks_requested = Signal()
     dashboard_requested = Signal()
     settings_requested = Signal()
@@ -58,7 +65,8 @@ class PonyWindow(QWidget):
     quit_requested = Signal()
 
     def __init__(self, character: str = "twilight", scale: float = 1.0,
-                 idle_wander: bool = True) -> None:
+                 idle_wander: bool = True, stay_put: bool = False,
+                 anchor: QPoint | None = None) -> None:
         # macOS force-hides Qt.Tool windows whenever this app is not the active
         # application, so the pony would vanish the instant you click another
         # window (WA_MacAlwaysShowToolWindow is unreliable on Qt6). Use a plain
@@ -106,6 +114,7 @@ class PonyWindow(QWidget):
         self._tick.timeout.connect(self._step)
         self._tick.start(TICK_MS)
         self._idle_wander = idle_wander
+        self._stay_put = stay_put
         self._wander_cooldown = random.randint(300, 900)  # ticks
         self._bounce_left = 0
         self._attention_ticks = 0
@@ -116,7 +125,7 @@ class PonyWindow(QWidget):
         self._attention_at_press = False
 
         self._apply_visual()
-        self.move_to_default()
+        self.move_to_anchor(anchor)
 
     def event(self, e) -> bool:  # noqa: N802
         # Re-apply on every Show/WinIdChange: Qt recreates the NSWindow when
@@ -168,10 +177,15 @@ class PonyWindow(QWidget):
         self.label.setPixmap(self._frames[self._frame_i])
 
     def set_state(self, state: str, facing: str | None = None) -> None:
-        if facing is not None:
-            self.facing = facing
-        if (state, self.facing) != (self.state, facing):
-            self.state = state
+        # Compare against the *current* pair before overwriting it. Assigning
+        # self.facing first and then comparing to the argument collapsed the test
+        # to `state != self.state`, so a facing-only flip (walking left, then
+        # right) never reloaded the GIF and she walked backwards — while
+        # set_state("idle") with facing=None always compared unequal and forced a
+        # pointless QMovie teardown/rebuild on every single arrival.
+        new_facing = self.facing if facing is None else facing
+        if (state, new_facing) != (self.state, self.facing):
+            self.state, self.facing = state, new_facing
             self._apply_visual()
 
     def set_character(self, slug: str) -> None:
@@ -182,6 +196,23 @@ class PonyWindow(QWidget):
     def set_idle_wander(self, on: bool) -> None:
         """Toggle idle wandering at runtime (applies immediately)."""
         self._idle_wander = on
+
+    @property
+    def stay_put(self) -> bool:
+        return self._stay_put
+
+    def set_stay_put(self, on: bool) -> None:
+        """Pin her in place (or release her) at runtime.
+
+        Pinning mid-stride cancels the walk in flight, so the toggle takes effect
+        immediately instead of after she reaches wherever she was headed.
+        """
+        self._stay_put = on
+        if on:
+            self._target = None
+            self._on_arrive = None
+            if self.state in ("walk", "run"):
+                self.set_state("idle")
 
     def set_scale(self, scale: float) -> None:
         """Resize the pony at runtime (rebuilds geometry + sprites)."""
@@ -199,6 +230,23 @@ class PonyWindow(QWidget):
         area = QApplication.primaryScreen().availableGeometry()
         self.move(area.right() - self.width() - 80, area.bottom() - self.height())
 
+    def move_to_anchor(self, anchor: QPoint | None) -> None:
+        """Restore a remembered spot, falling back to the default corner when it
+        is no longer on any connected screen (external display unplugged).
+
+        Cannot use _area(): that reads self.pos(), which is still ~(0,0) on the
+        very first placement, so it would resolve the wrong screen.
+        """
+        screen = QApplication.screenAt(anchor) if anchor is not None else None
+        if screen is None:
+            self.move_to_default()
+            return
+        area = screen.availableGeometry()
+        self.move(
+            max(area.left(), min(anchor.x(), area.right() - self.width())),
+            max(area.top(), min(anchor.y(), area.bottom() - self.height())),
+        )
+
     def anchor_point(self) -> QPoint:
         """Where speech bubbles point: roughly the head."""
         return QPoint(self.x() + self.width() // 2, self.y() + int(self.height() * 0.18))
@@ -206,6 +254,16 @@ class PonyWindow(QWidget):
     # ── behavior ─────────────────────────────────────────────────────
     def walk_to(self, target: QPoint, run: bool = False,
                 on_arrive: Callable[[], None] | None = None) -> None:
+        if self._stay_put:
+            # Pinned: she does not travel. Every autonomous movement path funnels
+            # through here (idle wander, the nudge cursor-chase, the walk back to
+            # the floor), so this one gate covers them all. No caller passes
+            # on_arrive today; fire it deferred anyway so the arrival contract is
+            # never silently dropped, and never re-enters _step from inside a tick.
+            self._target = None
+            if on_arrive is not None:
+                QTimer.singleShot(0, on_arrive)
+            return
         area = self._area()
         x = max(area.left(), min(target.x(), area.right() - self.width()))
         y = max(area.top(), min(target.y(), area.bottom() - self.height()))
@@ -250,7 +308,7 @@ class PonyWindow(QWidget):
         me = self.geometry().center()
         delta = me - cur
         dist = (delta.x() ** 2 + delta.y() ** 2) ** 0.5
-        if dist > ATTENTION_NEAR_PX:
+        if dist > ATTENTION_NEAR_PX and not self._stay_put:
             # aim for a standoff point just short of the pointer so she stands
             # beside it instead of covering what the user is looking at
             k = ATTENTION_STANDOFF_PX / max(dist, 1.0)
@@ -258,6 +316,9 @@ class PonyWindow(QWidget):
             ty = int(cur.y() + delta.y() * k) - self.height() // 2
             self.walk_to(QPoint(tx, ty), run=True)
         elif self._target is None:
+            # Close enough — or pinned, in which case she can't come to you and
+            # makes herself seen from her spot instead: turns toward the pointer
+            # and hops, with the bubble held open by seek_attention() throughout.
             self.set_state("idle", "left" if cur.x() < me.x() else "right")
             if random.random() < 0.3:
                 self.bounce()
@@ -313,6 +374,11 @@ class PonyWindow(QWidget):
         if roll < 0.30:
             self.say(random.choice(QUIPS), msec=5000)
             return
+        if self._stay_put:
+            # Pinned: the walk branch is off the table, so idle this turn out.
+            # Deliberately NOT folded into the quip branch above — that would take
+            # quips from 12% of turns to 82% and turn her into a chatterbox.
+            return
         x = random.randint(area.left(), area.right() - self.width())
         self.walk_to(QPoint(x, area.bottom() - self.height()))
 
@@ -361,8 +427,12 @@ class PonyWindow(QWidget):
                     self._end_attention(True)
                 else:
                     self.clicked.emit()
-            elif moved > 60 and random.random() < 0.35:
-                self.say(random.choice(DRAG_REACTIONS), msec=2600)
+            else:
+                # She was carried somewhere on purpose — report the drop point.
+                # Emitted unconditionally; the app persists it only while pinned.
+                self.anchor_changed.emit(self.x(), self.y())
+                if moved > 60 and random.random() < 0.35:
+                    self.say(random.choice(DRAG_REACTIONS), msec=2600)
             self._attention_at_press = False
 
     def contextMenuEvent(self, e) -> None:
@@ -385,6 +455,10 @@ class PonyWindow(QWidget):
         peek.setCheckable(True)
         peek.setChecked(self.screenshot_enabled)
         peek.toggled.connect(self.screenshot_toggled.emit)
+        pin = menu.addAction("📌 stay put")
+        pin.setCheckable(True)
+        pin.setChecked(self._stay_put)
+        pin.toggled.connect(self.stay_put_toggled.emit)
         menu.addSeparator()
         menu.addAction("💬 chat", self.clicked.emit)
         menu.addAction("📊 planner & activity", self.dashboard_requested.emit)

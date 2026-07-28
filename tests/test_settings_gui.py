@@ -7,7 +7,7 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtTest import QSignalSpy
-from PySide6.QtWidgets import QApplication, QGroupBox, QLabel, QPlainTextEdit
+from PySide6.QtWidgets import QApplication, QCheckBox, QGroupBox, QLabel, QPlainTextEdit
 
 from clipponyai.config import Config
 from clipponyai.settings_dialog import SettingsDialog
@@ -107,6 +107,30 @@ def test_successful_apply_emits_live_update_signal():
 
     assert spy.count() == 1
     dialog.close()
+
+
+def test_pony_tab_stay_put_checkbox_roundtrips():
+    app = QApplication.instance() or QApplication([])
+    config = Config()
+    config.ui.stay_put = True
+    dialog = SettingsDialog(config, available_providers=sorted(config.llm.providers))
+
+    pony_tab = dialog._tabs.widget(1)
+    assert dialog._tabs.tabText(1) == "Pony"
+    chk_stay = next(chk for chk in pony_tab.findChildren(QCheckBox) if "Stay put" in chk.text())
+    assert chk_stay.isChecked() is True  # reflects the config it was built from
+
+    # the note must explain that pinning is about position, not silence
+    note_text = " ".join(label.text() for label in pony_tab.findChildren(QLabel))
+    assert "drop her at" in note_text
+    assert "chatter" in note_text
+
+    chk_stay.setChecked(False)
+    dialog._collect_tab_values()
+    assert dialog.form.pony_stay_put is False
+
+    dialog.close()
+    app.processEvents()
 
 
 def test_observation_and_reflection_controls_roundtrip_multiline_patterns():

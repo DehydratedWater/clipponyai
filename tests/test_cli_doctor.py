@@ -390,6 +390,23 @@ def test_doctor_awareness_non_mutating(capsys, monkeypatch, tmp_path):
     assert after.screenshot_enabled == before.screenshot_enabled
 
 
+# ── doctor: stay put ──────────────────────────────────────────────────
+
+
+def test_doctor_reports_stay_put_off_by_default(capsys, monkeypatch, tmp_path):
+    Config().save()
+    _run_doctor(monkeypatch, tmp_path)
+    assert "stay put: off (she wanders and chases)" in capsys.readouterr().out
+
+
+def test_doctor_reports_stay_put_when_pinned(capsys, monkeypatch, tmp_path):
+    config = Config()
+    config.ui.stay_put = True
+    config.save()
+    _run_doctor(monkeypatch, tmp_path)
+    assert "stay put: ON (pinned)" in capsys.readouterr().out
+
+
 # ── doctor: observation and reflection status ─────────────────────────
 
 

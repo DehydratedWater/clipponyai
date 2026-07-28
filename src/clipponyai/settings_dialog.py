@@ -168,6 +168,16 @@ def _build_pony_tab(form: SettingsForm) -> QWidget:
     attn_spin.setSuffix(" s")
     attn_spin.setValue(form.pony_attention_seconds)
 
+    chk_stay = QCheckBox("Stay put (only move when I drag her)")
+    chk_stay.setChecked(form.pony_stay_put)
+    stay_note = QLabel(
+        "She keeps the spot you drop her at — no idle walking, and reminders hop "
+        "and speak in place instead of galloping to your cursor. Idle antics and "
+        "chatter below are unaffected."
+    )
+    stay_note.setWordWrap(True)
+    stay_note.setStyleSheet("color: #8d86a8; font-size: 11px;")
+
     chk_wander = QCheckBox("Wander around when idle")
     chk_wander.setChecked(form.pony_idle_wander)
 
@@ -181,6 +191,8 @@ def _build_pony_tab(form: SettingsForm) -> QWidget:
     fl.addRow("", err_scale)
     fl.addRow("Attention chase duration:", attn_spin)
     fl.addRow("", err_attn)
+    fl.addRow("", chk_stay)
+    fl.addRow("", stay_note)
     fl.addRow("", chk_wander)
     box.setLayout(fl)
     lay.addWidget(box)
@@ -190,6 +202,7 @@ def _build_pony_tab(form: SettingsForm) -> QWidget:
         form.character = char_combo.currentData()
         form.pony_scale = scale_spin.value() / 100.0
         form.pony_attention_seconds = attn_spin.value()
+        form.pony_stay_put = chk_stay.isChecked()
         form.pony_idle_wander = chk_wander.isChecked()
 
     def set_errors(errors: dict[str, str]) -> None:

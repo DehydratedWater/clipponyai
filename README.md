@@ -30,6 +30,11 @@ clipponyai                    # 🦄 (sprites download on first run)
 - **Chases your cursor** for reminders that must not be missed — a corner
   notification is easy to ignore; a pony galloping at your pointer is not.
   Click her (or the bubble) to acknowledge.
+- **Or holds perfectly still.** On a single laptop screen a galloping pony is
+  just in the way, so `📌 stay put` in the right-click menu pins her: she keeps
+  the spot you drag her to, across restarts, and never moves on her own again.
+  Reminders still reach you — she hops and speaks in place instead of
+  travelling. She stays just as chatty; only the walking stops.
 - **Sees your screen — only if you let her.** Screen peeking is **off by
   default**; enable it in the right-click menu and she can answer "what am I
   looking at?" with a vision model.
@@ -203,6 +208,9 @@ ui:
   scale: 1.0
   idle_wander: true         # random walks, reading, little quips
   attention_seconds: 30     # how long a reminder chases your cursor
+  stay_put: false           # pin her: she only moves when you drag her
+  anchor_x: null            # remembered spot — set for you when you drag
+  anchor_y: null            # her while stay_put is on
 screenshot_enabled: false   # privacy: SHE CANNOT SEE YOUR SCREEN unless true
 awareness:
   enabled: false              # proactive focus/distraction awareness
@@ -394,7 +402,7 @@ Right-click the pony to open the settings dialog. It covers every config
 section in a tabbed UI:
 
 - **Privacy** — screen peeking toggle, auto-commitment tracking
-- **Pony** — character, size, attention chase duration, idle wandering
+- **Pony** — character, size, attention chase duration, idle wandering, stay put
 - **Reminders** — enabled, check interval, quiet hours, nudge gaps, max nudges, batch limit
 - **Work Hours** — enable/disable, start/end times, active weekdays, closing nudge, off-hours suppression
 - **Log Watch** — enable/disable, file paths, line/char limits

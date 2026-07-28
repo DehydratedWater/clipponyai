@@ -56,6 +56,10 @@ class SettingsForm:
     pony_scale: float = 1.0
     pony_idle_wander: bool = True
     pony_attention_seconds: int = 30
+    # ui.anchor_x/anchor_y are deliberately absent: they are set by dragging her,
+    # not by the dialog, so keeping them out means a settings save can never
+    # clobber the remembered spot.
+    pony_stay_put: bool = False
 
     # reminders
     reminders_enabled: bool = True
@@ -146,6 +150,7 @@ def read_form(config: Config, *, autostart_enabled: bool = False) -> SettingsFor
         pony_scale=config.ui.scale,
         pony_idle_wander=config.ui.idle_wander,
         pony_attention_seconds=config.ui.attention_seconds,
+        pony_stay_put=config.ui.stay_put,
         reminders_enabled=rem.enabled,
         reminders_check_interval=rem.check_interval_seconds,
         reminders_quiet_start=rem.quiet_hours_start,
@@ -360,6 +365,7 @@ def apply_to_config(form: SettingsForm, config: Config) -> None:
     config.ui.scale = form.pony_scale
     config.ui.idle_wander = form.pony_idle_wander
     config.ui.attention_seconds = form.pony_attention_seconds
+    config.ui.stay_put = form.pony_stay_put
     config.ui.character = form.character
 
     rem = config.reminders
