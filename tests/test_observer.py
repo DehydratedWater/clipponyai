@@ -266,3 +266,36 @@ async def test_loop_rereads_sample_interval_after_refresh(monkeypatch, config, o
 
     assert seen_timeouts == [15, 5]
     await recorder.stop()
+
+
+def test_default_clock_is_naive_local_like_the_rest_of_the_stack():
+    """The OS spine must share one timeline with awareness and the stores.
+
+    A tz-aware UTC clock here is silently dropped by the shared SQLite timestamp
+    format, offsetting OS episodes from vision rows by the local UTC offset. That
+    breaks the digest's containment fold and hides OS rows from reflection.
+    """
+    from clipponyai.awareness import _RealClock
+
+    sampled = observer._now()
+    assert sampled.tzinfo is None
+    assert abs((sampled - _RealClock().now()).total_seconds()) < 5
+
+
+@pytest.mark.asyncio
+async def test_default_clock_records_episodes_on_the_local_timeline(config, observation_store):
+    """An episode recorded with the production clock must read back as 'now'."""
+    recorder = ObservationRecorder(
+        config,
+        observation_store,
+        context_fn=ContextSequence(context()),
+    )
+
+    await recorder._tick()
+
+    recorded = observation_store.latest()
+    assert recorded is not None
+    assert recorded.source == "os"
+    assert recorded.started_at.tzinfo is None
+    drift = abs((recorded.started_at - datetime.now()).total_seconds())
+    assert drift < 60, f"OS episode is {drift:.0f}s off the local timeline"

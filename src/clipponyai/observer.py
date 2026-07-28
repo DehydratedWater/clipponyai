@@ -6,7 +6,7 @@ import asyncio
 import logging
 from collections.abc import Callable
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 
 from .accountability import Observation
@@ -17,8 +17,12 @@ log = logging.getLogger("clipponyai.observer")
 _MIN_SAMPLE_SECONDS = 5
 
 
-def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+def _now() -> datetime:
+    # Naive local time: the shared SQLite timestamp format drops tzinfo, and every
+    # other store/consumer (awareness, reflection, digest) is naive-local. A UTC
+    # clock here silently offsets OS episodes from vision rows, which breaks the
+    # digest's containment fold and hides them from reflection's freshness window.
+    return datetime.now()
 
 
 class ObservationRecorder:
@@ -30,7 +34,7 @@ class ObservationRecorder:
         observation_store: Any,
         *,
         context_fn: Callable[..., ForegroundContext | None] = foreground_context,
-        clock: Callable[[], datetime] = _utcnow,
+        clock: Callable[[], datetime] = _now,
     ) -> None:
         self.config = config
         self.observation_store = observation_store

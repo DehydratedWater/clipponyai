@@ -26,7 +26,8 @@ Reflect = Callable[[str], Awaitable[str | None]]
 Deliver = Callable[..., Awaitable[None]]
 
 
-def _utcnow() -> datetime:
+def _now() -> datetime:
+    # Naive local time, matching the shared SQLite timestamp format.
     return datetime.now()
 
 
@@ -52,7 +53,7 @@ class ReflectionEngine:
         reflect_fn: Reflect,
         deliver: Deliver,
         questioner: Any | None = None,
-        clock: Callable[[], datetime] = _utcnow,
+        clock: Callable[[], datetime] = _now,
         routine_engine: Any | None = None,
         goal_engine: Any | None = None,
     ) -> None:
