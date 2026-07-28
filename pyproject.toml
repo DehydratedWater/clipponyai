@@ -29,6 +29,7 @@ dependencies = [
     "mss>=9.0",
     "markdown>=3.10.2",
     "pyobjc-framework-Cocoa>=10; sys_platform == 'darwin'",
+    "pyobjc-framework-Quartz>=10; sys_platform == 'darwin'",
 ]
 
 [project.optional-dependencies]

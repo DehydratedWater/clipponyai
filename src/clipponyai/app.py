@@ -22,6 +22,7 @@ from .goals import GoalEngine
 from .logwatch import read_recent_logs
 from .mcp import MCPManager
 from .onboarding import OnboardingManager
+from .observer import ObservationRecorder
 from .rules import RuleEngine
 from .scheduler import ReminderScheduler
 from .skills import SkillsLibrary
@@ -135,6 +136,7 @@ class Core:
             self._deliver_nudge,
             activity_store=self.accountability["activity"],
         )
+        self.observation_recorder = ObservationRecorder(config, observation_store)
         self.channels: list[Channel] = []
         self.observers: list[Observer] = []  # GUI mirrors exchanges live
         self.nudge_hooks: list[Deliver] = []  # GUI shows nudges (bubble + chase)
@@ -278,10 +280,12 @@ class Core:
                 log.error("telegram channel not started: %s", e)
         self._tasks.append(asyncio.create_task(self.scheduler.run()))
         await self.awareness_monitor.start()
+        await self.observation_recorder.start()
 
     async def stop(self) -> None:
         self.scheduler.stop()
         await self.awareness_monitor.stop()
+        await self.observation_recorder.stop()
         for task in self._tasks:
             task.cancel()
         self.mcp_manager.stop()
@@ -351,6 +355,10 @@ def _open_settings(pony, core: Core, config: Config, chat=None) -> None:
             core.proactive_questioner.config = config.proactive_questions
         try:
             asyncio.get_running_loop().create_task(core.awareness_monitor.refresh())
+        except RuntimeError:
+            pass
+        try:
+            asyncio.get_running_loop().create_task(core.observation_recorder.refresh())
         except RuntimeError:
             pass
 
