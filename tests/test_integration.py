@@ -12,7 +12,7 @@ Covers:
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -60,7 +60,9 @@ def make_brain_with_stores(config, store, stores):
             return client
 
         brain = PonyBrain(
-            config, store, client_factory=factory,
+            config,
+            store,
+            client_factory=factory,
             accountability_stores=stores,
             activity_store=stores["activity"],
         )
@@ -165,11 +167,13 @@ class TestToolSpecs:
 class TestRoutineToolHandlers:
     def test_add_routine(self, make_brain_with_stores, stores):
         brain = make_brain_with_stores({})
-        result = brain._tool_add_routine({
-            "title": "Morning stretch",
-            "cadence": "daily",
-            "time_of_day": "07:00",
-        })
+        result = brain._tool_add_routine(
+            {
+                "title": "Morning stretch",
+                "cadence": "daily",
+                "time_of_day": "07:00",
+            }
+        )
         assert "added routine" in result
         routines = stores["routines"].list_all()
         assert len(routines) == 1
@@ -204,11 +208,13 @@ class TestRoutineToolHandlers:
     def test_edit_routine(self, make_brain_with_stores, stores):
         r = stores["routines"].add("Old name", cadence="daily")
         brain = make_brain_with_stores({})
-        result = brain._tool_edit_routine({
-            "routine_id": r.id,
-            "title": "New name",
-            "time_of_day": "08:00",
-        })
+        result = brain._tool_edit_routine(
+            {
+                "routine_id": r.id,
+                "title": "New name",
+                "time_of_day": "08:00",
+            }
+        )
         assert "updated" in result
         updated = stores["routines"].get(r.id)
         assert updated.title == "New name"
@@ -229,9 +235,11 @@ class TestRoutineToolHandlers:
     def test_complete_routine_with_engine(self, make_brain_with_stores, stores):
         r = stores["routines"].add("Stretch", cadence="daily")
         brain = make_brain_with_stores({})
+
         # Wire in a routine engine
         async def deliver(msg):
             pass
+
         engine = RoutineEngine(
             routine_store=stores["routines"],
             completion_store=stores["routine_completions"],
@@ -246,8 +254,10 @@ class TestRoutineToolHandlers:
     def test_skip_routine_with_engine(self, make_brain_with_stores, stores):
         r = stores["routines"].add("Stretch", cadence="daily")
         brain = make_brain_with_stores({})
+
         async def deliver(msg):
             pass
+
         engine = RoutineEngine(
             routine_store=stores["routines"],
             completion_store=stores["routine_completions"],
@@ -292,10 +302,12 @@ class TestGoalToolHandlers:
 
     def test_add_goal(self, make_brain_with_stores, stores):
         brain = make_brain_with_stores({})
-        result = brain._tool_add_goal({
-            "title": "Read daily",
-            "target_count": 7,
-        })
+        result = brain._tool_add_goal(
+            {
+                "title": "Read daily",
+                "target_count": 7,
+            }
+        )
         assert "added goal" in result
         goals = stores["goals"].list_all()
         assert len(goals) == 1
@@ -352,9 +364,12 @@ class TestGoalToolHandlers:
         r = stores["routines"].add("Routine")
         brain = make_brain_with_stores({})
         brain._goal_engine = self._make_engine(stores)
-        result = brain._tool_link_routine_to_goal({
-            "goal_id": g.id, "routine_id": r.id,
-        })
+        result = brain._tool_link_routine_to_goal(
+            {
+                "goal_id": g.id,
+                "routine_id": r.id,
+            }
+        )
         assert "linked" in result
         updated = stores["goals"].get(g.id)
         assert r.id in updated.linked_routine_ids
@@ -363,9 +378,12 @@ class TestGoalToolHandlers:
         stores["routines"].add("Routine")
         brain = make_brain_with_stores({})
         brain._goal_engine = self._make_engine(stores)
-        result = brain._tool_link_routine_to_goal({
-            "goal_id": 9999, "routine_id": 1,
-        })
+        result = brain._tool_link_routine_to_goal(
+            {
+                "goal_id": 9999,
+                "routine_id": 1,
+            }
+        )
         assert "no goal" in result
 
     def test_achieve_goal(self, make_brain_with_stores, stores):
@@ -392,13 +410,15 @@ class TestGoalToolHandlers:
 class TestRuleToolHandlers:
     def test_add_rule(self, make_brain_with_stores, stores):
         brain = make_brain_with_stores({})
-        result = brain._tool_add_rule({
-            "title": "Late night reminder",
-            "rule_type": "time",
-            "condition": "after 22:00",
-            "message": "Time to sleep!",
-            "cooldown_minutes": 60,
-        })
+        result = brain._tool_add_rule(
+            {
+                "title": "Late night reminder",
+                "rule_type": "time",
+                "condition": "after 22:00",
+                "message": "Time to sleep!",
+                "cooldown_minutes": 60,
+            }
+        )
         assert "added rule" in result
         rules = stores["rules"].list_all()
         assert len(rules) == 1
@@ -412,9 +432,13 @@ class TestRuleToolHandlers:
 
     def test_add_rule_records_activity(self, make_brain_with_stores, stores):
         brain = make_brain_with_stores({})
-        brain._tool_add_rule({
-            "title": "Test", "rule_type": "time", "condition": "after 22:00",
-        })
+        brain._tool_add_rule(
+            {
+                "title": "Test",
+                "rule_type": "time",
+                "condition": "after 22:00",
+            }
+        )
         entries = stores["activity"].recent()
         assert any(e.action == "rule_added" for e in entries)
 
@@ -424,8 +448,13 @@ class TestRuleToolHandlers:
         assert "No accountability rules" in result
 
     def test_list_rules_shows_details(self, make_brain_with_stores, stores):
-        stores["rules"].add("Rule A", rule_type="time", condition="after 22:00",
-                            message="Sleep!", cooldown_minutes=30)
+        stores["rules"].add(
+            "Rule A",
+            rule_type="time",
+            condition="after 22:00",
+            message="Sleep!",
+            cooldown_minutes=30,
+        )
         brain = make_brain_with_stores({})
         result = brain._tool_list_rules({})
         assert "Rule A" in result
@@ -434,11 +463,13 @@ class TestRuleToolHandlers:
     def test_edit_rule(self, make_brain_with_stores, stores):
         r = stores["rules"].add("Old", rule_type="time", condition="after 22:00")
         brain = make_brain_with_stores({})
-        result = brain._tool_edit_rule({
-            "rule_id": r.id,
-            "title": "New",
-            "cooldown_minutes": 120,
-        })
+        result = brain._tool_edit_rule(
+            {
+                "rule_id": r.id,
+                "title": "New",
+                "cooldown_minutes": 120,
+            }
+        )
         assert "updated" in result
         updated = stores["rules"].get(r.id)
         assert updated.title == "New"
@@ -495,19 +526,19 @@ class TestActivityTokenTools:
         assert "test_action" in result
         assert "hello" in result
 
-    def test_recent_activity_hides_awareness_bookkeeping(
-        self, make_brain_with_stores, stores
-    ):
+    def test_recent_activity_hides_awareness_bookkeeping(self, make_brain_with_stores, stores):
         """Screen assessments are Activity-panel bookkeeping. Handed to the chat
         model they bury the rows the user asked about — and read as an answer."""
         stores["activity"].record("task_completed", actor="user", detail="filed taxes")
         for i in range(20):
             stores["activity"].record(
-                "screen_assessed", actor="awareness",
+                "screen_assessed",
+                actor="awareness",
                 detail=f"verdict=no interrupt, reason=The user is browsing Reddit ({i})",
             )
         stores["activity"].record(
-            "awareness_intervention", actor="awareness",
+            "awareness_intervention",
+            actor="awareness",
             detail="Screen intervention: The user is browsing Reddit",
         )
         brain = make_brain_with_stores({})
@@ -523,6 +554,47 @@ class TestActivityTokenTools:
         result = brain._tool_recent_activity({"limit": 2})
         assert "action_4" in result
         assert "action_3" in result
+
+    def test_recent_screen_activity_disabled_and_empty(self, make_brain_with_stores):
+        brain = make_brain_with_stores({})
+
+        assert brain._tool_recent_screen_activity({}).startswith("ERROR:")
+
+    def test_recent_screen_activity_renders_existing_rows_when_disabled(
+        self, make_brain_with_stores, stores
+    ):
+        now = datetime.now()
+        stores["observations"].record(
+            started_at=now - timedelta(minutes=30),
+            ended_at=now,
+            app="Cursor",
+            window_title="digest.py",
+            category="work",
+        )
+        brain = make_brain_with_stores({})
+
+        result = brain._tool_recent_screen_activity({})
+
+        assert "Cursor" in result
+        assert "digest.py" in result
+
+    def test_recent_screen_activity_clamps_hours(self, make_brain_with_stores, stores):
+        now = datetime.now()
+        for hours, app in ((0.5, "Recent"), (2, "Too old for minimum"), (23, "Yesterday")):
+            stores["observations"].record(
+                started_at=now - timedelta(hours=hours),
+                ended_at=now - timedelta(hours=hours) + timedelta(minutes=5),
+                app=app,
+                category="work",
+            )
+        brain = make_brain_with_stores({})
+
+        minimum = brain._tool_recent_screen_activity({"hours": -10})
+        maximum = brain._tool_recent_screen_activity({"hours": 999})
+
+        assert "Recent" in minimum
+        assert "Too old for minimum" not in minimum
+        assert "Yesterday" in maximum
 
     def test_token_usage_empty(self, make_brain_with_stores):
         brain = make_brain_with_stores({})
@@ -599,11 +671,14 @@ class TestSchedulerGoalSync:
         )
 
         delivered = []
+
         async def deliver(msg):
             delivered.append(msg)
 
         sched = ReminderScheduler(
-            store, RemindersConfig(), deliver,
+            store,
+            RemindersConfig(),
+            deliver,
             goal_engine=engine,
         )
 
@@ -628,12 +703,15 @@ class TestSchedulerGoalSync:
         )
 
         delivered = []
+
         async def deliver(msg):
             delivered.append(msg)
 
         sched = ReminderScheduler(
-            store, RemindersConfig(quiet_hours_start=23, quiet_hours_end=8),
-            deliver, goal_engine=engine,
+            store,
+            RemindersConfig(quiet_hours_start=23, quiet_hours_end=8),
+            deliver,
+            goal_engine=engine,
         )
 
         # 23:30 — in quiet hours
@@ -646,6 +724,7 @@ class TestSchedulerGoalSync:
     async def test_goal_sync_no_engine(self, store):
         """Scheduler works without goal engine."""
         delivered = []
+
         async def deliver(msg):
             delivered.append(msg)
 
@@ -662,8 +741,10 @@ class TestSchedulerRuleFiring:
     async def test_rule_fires_on_tick(self, store, stores):
         """Rule engine fires on scheduler tick."""
         stores["rules"].add(
-            "Late night", rule_type="time",
-            condition="after 22:00", message="Sleep!",
+            "Late night",
+            rule_type="time",
+            condition="after 22:00",
+            message="Sleep!",
         )
 
         rule_engine = RuleEngine(
@@ -672,11 +753,14 @@ class TestSchedulerRuleFiring:
         )
 
         delivered = []
+
         async def deliver(msg):
             delivered.append(msg)
 
         sched = ReminderScheduler(
-            store, RemindersConfig(), deliver,
+            store,
+            RemindersConfig(),
+            deliver,
             rule_engine=rule_engine,
         )
 
@@ -688,11 +772,14 @@ class TestSchedulerRuleFiring:
     async def test_rule_suppressed_in_quiet(self, store, stores):
         """Rule delivery suppressed in quiet hours but rule still fires."""
         stores["rules"].add(
-            "Quiet rule", rule_type="time",
-            condition="after 22:00", message="Shh",
+            "Quiet rule",
+            rule_type="time",
+            condition="after 22:00",
+            message="Shh",
         )
 
         delivered = []
+
         def sync_delivery(msg, rid):
             delivered.append(msg)
 
@@ -706,8 +793,10 @@ class TestSchedulerRuleFiring:
             pass
 
         sched = ReminderScheduler(
-            store, RemindersConfig(quiet_hours_start=23, quiet_hours_end=8),
-            deliver, rule_engine=rule_engine,
+            store,
+            RemindersConfig(quiet_hours_start=23, quiet_hours_end=8),
+            deliver,
+            rule_engine=rule_engine,
         )
 
         now = datetime(2026, 1, 15, 23, 30)
@@ -721,6 +810,7 @@ class TestSchedulerRuleFiring:
     async def test_rule_no_engine(self, store):
         """Scheduler works without rule engine."""
         delivered = []
+
         async def deliver(msg):
             delivered.append(msg)
 

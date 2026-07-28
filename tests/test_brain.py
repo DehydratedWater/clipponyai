@@ -40,8 +40,7 @@ def test_chat_history_keeps_only_the_last_few_nudges():
     from clipponyai.brain import chat_history
 
     messages = [
-        {"role": "assistant", "content": f"nudge {i}", "source": "reminder"}
-        for i in range(5)
+        {"role": "assistant", "content": f"nudge {i}", "source": "reminder"} for i in range(5)
     ]
     messages.append({"role": "user", "content": "hello", "source": "desktop"})
     kept = chat_history(messages, keep_proactive=2)
@@ -90,12 +89,16 @@ async def test_awareness_nudges_do_not_flood_the_chat_lane(make_brain, store):
 
 # ── tool loop ─────────────────────────────────────────────────────────
 async def test_add_task_tool_with_llm_time_parsing(make_brain, store):
-    brain = make_brain({
-        "pony": [("tool", "add_task", {"title": "submit the report", "when": "tomorrow at 10"}),
-                 "noted! I'll remind you ✨"],
-        "message-sensor": EMPTY_SENSE,
-        "when-sensor": {"datetime": "2026-07-23 10:00"},
-    })
+    brain = make_brain(
+        {
+            "pony": [
+                ("tool", "add_task", {"title": "submit the report", "when": "tomorrow at 10"}),
+                "noted! I'll remind you ✨",
+            ],
+            "message-sensor": EMPTY_SENSE,
+            "when-sensor": {"datetime": "2026-07-23 10:00"},
+        }
+    )
     reply = await brain.respond("remind me to submit the report tomorrow at 10")
     assert "remind" in reply
     tasks = store.pending()
@@ -105,12 +108,16 @@ async def test_add_task_tool_with_llm_time_parsing(make_brain, store):
 
 
 async def test_unparseable_time_reported_to_model(make_brain, store):
-    brain = make_brain({
-        "pony": [("tool", "add_task", {"title": "thing", "when": "whenever vibes"}),
-                 "when exactly?"],
-        "message-sensor": EMPTY_SENSE,
-        "when-sensor": {"datetime": ""},
-    })
+    brain = make_brain(
+        {
+            "pony": [
+                ("tool", "add_task", {"title": "thing", "when": "whenever vibes"}),
+                "when exactly?",
+            ],
+            "message-sensor": EMPTY_SENSE,
+            "when-sensor": {"datetime": ""},
+        }
+    )
     await brain.respond("track thing whenever vibes")
     assert store.pending() == []  # nothing added on unparseable time
     pony = [c for c in brain._test_clients if c.spec.agent_id == "pony"][-1]
@@ -120,20 +127,24 @@ async def test_unparseable_time_reported_to_model(make_brain, store):
 
 async def test_complete_task_tool_by_ref(make_brain, store):
     task, _ = store.add("water the plants")
-    brain = make_brain({
-        "pony": [("tool", "complete_task", {"ref": f"#{task.id}"}), "done! 🎉"],
-        "message-sensor": EMPTY_SENSE,
-    })
+    brain = make_brain(
+        {
+            "pony": [("tool", "complete_task", {"ref": f"#{task.id}"}), "done! 🎉"],
+            "message-sensor": EMPTY_SENSE,
+        }
+    )
     await brain.respond("mark the plants as watered please")
     assert store.get(task.id).status == "done"
 
 
 async def test_list_tasks_tool_returns_verbatim_overview(make_brain, store):
     store.add("water the plants")
-    brain = make_brain({
-        "pony": [("tool", "list_tasks", {}), "here you go"],
-        "message-sensor": EMPTY_SENSE,
-    })
+    brain = make_brain(
+        {
+            "pony": [("tool", "list_tasks", {}), "here you go"],
+            "message-sensor": EMPTY_SENSE,
+        }
+    )
     await brain.respond("what's on my list?")
     pony = [c for c in brain._test_clients if c.spec.agent_id == "pony"][-1]
     tool_result = [m for m in pony.calls[-1]["messages"] if m.get("role") == "tool"]
@@ -141,11 +152,13 @@ async def test_list_tasks_tool_returns_verbatim_overview(make_brain, store):
 
 
 async def test_deep_think_routes_to_slow_lane(make_brain, store, config):
-    brain = make_brain({
-        "pony": [("tool", "deep_think", {"question": "plan my week"}), "the slow lane says…"],
-        "message-sensor": EMPTY_SENSE,
-        "pony-slow": "a very thorough plan",
-    })
+    brain = make_brain(
+        {
+            "pony": [("tool", "deep_think", {"question": "plan my week"}), "the slow lane says…"],
+            "message-sensor": EMPTY_SENSE,
+            "pony-slow": "a very thorough plan",
+        }
+    )
     await brain.respond("help me plan my week properly")
     slow_clients = [c for c in brain._test_clients if c.spec.agent_id == "pony-slow"]
     assert slow_clients and slow_clients[0].calls
@@ -155,10 +168,12 @@ async def test_deep_think_routes_to_slow_lane(make_brain, store, config):
 
 
 async def test_unknown_tool_reports_error(make_brain):
-    brain = make_brain({
-        "pony": [("tool", "imaginary_tool", {}), "oops"],
-        "message-sensor": EMPTY_SENSE,
-    })
+    brain = make_brain(
+        {
+            "pony": [("tool", "imaginary_tool", {}), "oops"],
+            "message-sensor": EMPTY_SENSE,
+        }
+    )
     await brain.respond("hello")
     pony = [c for c in brain._test_clients if c.spec.agent_id == "pony"][-1]
     tool_result = [m for m in pony.calls[-1]["messages"] if m.get("role") == "tool"]
@@ -178,8 +193,7 @@ def test_look_at_screen_headless(make_brain, config):
 
 
 def test_look_at_screen_sends_image_to_vision_lane(make_brain, config):
-    brain = make_brain({"pony-vision": "you are looking at a code editor"},
-                       screenshot_enabled=True)
+    brain = make_brain({"pony-vision": "you are looking at a code editor"}, screenshot_enabled=True)
     brain.screenshot_fn = lambda: b"\x89PNG fake bytes"
     result = brain._tool_look_at_screen({"question": "what app is this?"})
     assert result == "you are looking at a code editor"
@@ -193,11 +207,16 @@ def test_look_at_screen_sends_image_to_vision_lane(make_brain, config):
 # ── the message sensor: grounded completions & commitments ────────────
 async def test_sensor_completion_grounded(make_brain, store):
     task, _ = store.add("call the dentist")
-    brain = make_brain({
-        "pony": "yay, dentist done! 🎉",
-        "message-sensor": {"done_task_ids": [task.id], "maybe_done_task_ids": [],
-                           "commitments": []},
-    })
+    brain = make_brain(
+        {
+            "pony": "yay, dentist done! 🎉",
+            "message-sensor": {
+                "done_task_ids": [task.id],
+                "maybe_done_task_ids": [],
+                "commitments": [],
+            },
+        }
+    )
     await brain.respond("just got back from the dentist call")
     assert store.get(task.id).status == "done"
     # the chat model was told what really changed
@@ -209,12 +228,17 @@ async def test_sensor_completion_grounded(make_brain, store):
 async def test_sensor_completion_ungrounded_id_ignored(make_brain, store):
     store.add("call the dentist")
     store.add("water plants")
-    brain = make_brain({
-        "pony": "ok",
-        # sensor invents an id that shares no words with the message → demoted
-        "message-sensor": {"done_task_ids": [999], "maybe_done_task_ids": [],
-                           "commitments": []},
-    })
+    brain = make_brain(
+        {
+            "pony": "ok",
+            # sensor invents an id that shares no words with the message → demoted
+            "message-sensor": {
+                "done_task_ids": [999],
+                "maybe_done_task_ids": [],
+                "commitments": [],
+            },
+        }
+    )
     await brain.respond("finished it")
     assert all(t.status == "pending" for t in store.pending())
 
@@ -222,12 +246,17 @@ async def test_sensor_completion_ungrounded_id_ignored(make_brain, store):
 async def test_sensor_ungrounded_title_becomes_question(make_brain, store):
     dentist, _ = store.add("call the dentist")
     store.add("water plants")
-    brain = make_brain({
-        "pony": "which one?",
-        # message shares no words with the dentist task → must not complete
-        "message-sensor": {"done_task_ids": [dentist.id], "maybe_done_task_ids": [],
-                           "commitments": []},
-    })
+    brain = make_brain(
+        {
+            "pony": "which one?",
+            # message shares no words with the dentist task → must not complete
+            "message-sensor": {
+                "done_task_ids": [dentist.id],
+                "maybe_done_task_ids": [],
+                "commitments": [],
+            },
+        }
+    )
     await brain.respond("załatwione!")  # "done!" in Polish, no shared tokens
     assert store.get(dentist.id).status == "pending"
     pony = [c for c in brain._test_clients if c.spec.agent_id == "pony"][-1]
@@ -237,22 +266,32 @@ async def test_sensor_ungrounded_title_becomes_question(make_brain, store):
 
 async def test_sensor_single_pending_task_completes_without_overlap(make_brain, store):
     only, _ = store.add("call the dentist")
-    brain = make_brain({
-        "pony": "yay!",
-        "message-sensor": {"done_task_ids": [only.id], "maybe_done_task_ids": [],
-                           "commitments": []},
-    })
+    brain = make_brain(
+        {
+            "pony": "yay!",
+            "message-sensor": {
+                "done_task_ids": [only.id],
+                "maybe_done_task_ids": [],
+                "commitments": [],
+            },
+        }
+    )
     await brain.respond("załatwione!")  # only one candidate → trust the sensor
     assert store.get(only.id).status == "done"
 
 
 async def test_sensor_captures_commitment(make_brain, store):
-    brain = make_brain({
-        "pony": "I'll hold you to that! ✨",
-        "message-sensor": {"done_task_ids": [], "maybe_done_task_ids": [],
-                           "commitments": [{"text": "call mom", "when": "tonight"}]},
-        "when-sensor": {"datetime": "2026-07-22 20:00"},
-    })
+    brain = make_brain(
+        {
+            "pony": "I'll hold you to that! ✨",
+            "message-sensor": {
+                "done_task_ids": [],
+                "maybe_done_task_ids": [],
+                "commitments": [{"text": "call mom", "when": "tonight"}],
+            },
+            "when-sensor": {"datetime": "2026-07-22 20:00"},
+        }
+    )
     await brain.respond("busy day… I'll call mom tonight")
     tasks = store.pending()
     assert len(tasks) == 1
@@ -262,11 +301,16 @@ async def test_sensor_captures_commitment(make_brain, store):
 
 
 async def test_sensor_commitment_without_time_gets_ttl(make_brain, store):
-    brain = make_brain({
-        "pony": "ok!",
-        "message-sensor": {"done_task_ids": [], "maybe_done_task_ids": [],
-                           "commitments": [{"text": "eat lunch", "when": ""}]},
-    })
+    brain = make_brain(
+        {
+            "pony": "ok!",
+            "message-sensor": {
+                "done_task_ids": [],
+                "maybe_done_task_ids": [],
+                "commitments": [{"text": "eat lunch", "when": ""}],
+            },
+        }
+    )
     before = datetime.now()
     await brain.respond("I should eat lunch")
     task = store.pending()[0]
@@ -275,31 +319,47 @@ async def test_sensor_commitment_without_time_gets_ttl(make_brain, store):
 
 
 async def test_sensor_does_not_duplicate_assistant_planner_command(make_brain, store):
-    brain = make_brain({
-        "pony": "routine added",
-        "message-sensor": {"done_task_ids": [], "maybe_done_task_ids": [],
-                           "commitments": [{"text": "Breakfast routine", "when": ""}]},
-    })
+    brain = make_brain(
+        {
+            "pony": "routine added",
+            "message-sensor": {
+                "done_task_ids": [],
+                "maybe_done_task_ids": [],
+                "commitments": [{"text": "Breakfast routine", "when": ""}],
+            },
+        }
+    )
     await brain.respond("Set up a daily Breakfast routine at 08:00")
     assert store.pending() == []
 
 
 async def test_sensor_ungrounded_commitment_skipped(make_brain, store):
-    brain = make_brain({
-        "pony": "ok",
-        "message-sensor": {"done_task_ids": [], "maybe_done_task_ids": [],
-                           "commitments": [{"text": "conquer the moon", "when": ""}]},
-    })
+    brain = make_brain(
+        {
+            "pony": "ok",
+            "message-sensor": {
+                "done_task_ids": [],
+                "maybe_done_task_ids": [],
+                "commitments": [{"text": "conquer the moon", "when": ""}],
+            },
+        }
+    )
     await brain.respond("nice weather today")  # no shared words → invention
     assert store.pending() == []
 
 
 async def test_sensor_disabled_by_config(make_brain, store):
-    brain = make_brain({
-        "pony": "ok",
-        "message-sensor": {"done_task_ids": [], "maybe_done_task_ids": [],
-                           "commitments": [{"text": "call mom", "when": ""}]},
-    }, auto_track_commitments=False)
+    brain = make_brain(
+        {
+            "pony": "ok",
+            "message-sensor": {
+                "done_task_ids": [],
+                "maybe_done_task_ids": [],
+                "commitments": [{"text": "call mom", "when": ""}],
+            },
+        },
+        auto_track_commitments=False,
+    )
     await brain.respond("I'll call mom later")
     assert store.pending() == []
 
@@ -348,6 +408,15 @@ def test_switch_provider_changes_models(make_brain, config):
     assert brain._spec(FAST).model_id == "qwen3:8b"
     assert brain._spec(SLOW).model_id == "qwen3:32b"
     assert brain._spec(VISION).base_url == "http://localhost:11434/v1"
+
+
+def test_recent_screen_activity_tool_only_appears_in_fast_lane(make_brain):
+    brain = make_brain({})
+
+    assert "recent_screen_activity" in {tool.name for tool in brain._spec(FAST).tools}
+    assert brain._spec(SLOW).tools == ()
+    assert brain._spec(VISION).tools == ()
+    assert brain._sensor_spec("sensor", "sensor").tools == ()
 
 
 def test_switch_unknown_provider_raises(make_brain):

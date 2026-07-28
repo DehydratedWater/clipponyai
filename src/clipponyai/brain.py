@@ -42,6 +42,7 @@ from open_agent_compiler.interactive.spec import ToolSpec
 from .accountability import ActivityStore, get_stores
 from .characters import build_system_prompt, get_character
 from .config import Config
+from .digest import render_activity_digest
 from .goals import GoalEngine
 from .logwatch import read_recent_logs
 from .providers import FAST, SLOW, VISION, make_live_profile
@@ -61,8 +62,22 @@ log = logging.getLogger("clipponyai.brain")
 
 # words hinting an auto-detected commitment is a quick errand (short TTL)
 _MICRO_HINTS = {
-    "eat", "drink", "shower", "walk", "meds", "medication", "pill", "call",
-    "text", "email", "reply", "wash", "dishes", "trash", "laundry", "water",
+    "eat",
+    "drink",
+    "shower",
+    "walk",
+    "meds",
+    "medication",
+    "pill",
+    "call",
+    "text",
+    "email",
+    "reply",
+    "wash",
+    "dishes",
+    "trash",
+    "laundry",
+    "water",
 }
 _COMMITMENT_TTL_MICRO = timedelta(minutes=90)
 _COMMITMENT_TTL = timedelta(hours=36)
@@ -71,8 +86,19 @@ _COMMITMENT_TTL = timedelta(hours=36)
 # LLM sensor is instructed about this too, but this small deterministic guard
 # prevents structured planner commands from becoming duplicate one-time tasks.
 _ASSISTANT_COMMAND_PREFIXES = (
-    "add ", "create ", "delete ", "edit ", "list ", "make ", "remind ",
-    "restore ", "schedule ", "set up ", "show ", "snooze ", "track ",
+    "add ",
+    "create ",
+    "delete ",
+    "edit ",
+    "list ",
+    "make ",
+    "remind ",
+    "restore ",
+    "schedule ",
+    "set up ",
+    "show ",
+    "snooze ",
+    "track ",
 )
 
 
@@ -99,22 +125,22 @@ PROACTIVE_HISTORY_LIMIT = 2
 # …") — so recent_activity hands the model a wall of them and the real rows it
 # was asked about are nowhere in the answer. That log is the Activity panel's
 # bookkeeping, and the panel still shows every row.
-AWARENESS_AUDIT_ACTIONS = frozenset({
-    "screen_assessed", "screen_assessment_failed", "awareness_intervention",
-})
+AWARENESS_AUDIT_ACTIONS = frozenset(
+    {
+        "screen_assessed",
+        "screen_assessment_failed",
+        "awareness_intervention",
+    }
+)
 
 
-def chat_history(
-    messages: list[dict], keep_proactive: int = PROACTIVE_HISTORY_LIMIT
-) -> list[dict]:
+def chat_history(messages: list[dict], keep_proactive: int = PROACTIVE_HISTORY_LIMIT) -> list[dict]:
     """Model-facing history: every real exchange, only the last few nudges.
 
     Takes `recent_messages(..., with_source=True)` rows and returns plain
     role/content dicts — the API rejects anything else.
     """
-    proactive = [
-        i for i, m in enumerate(messages) if m.get("source") in PROACTIVE_SOURCES
-    ]
+    proactive = [i for i, m in enumerate(messages) if m.get("source") in PROACTIVE_SOURCES]
     dropped = set(proactive[: max(0, len(proactive) - keep_proactive)])
     return [
         {"role": m["role"], "content": m["content"]}
@@ -122,16 +148,19 @@ def chat_history(
         if i not in dropped
     ]
 
+
 # ── sensor schemas & prompts (small fast calls, tiny context) ─────────
 _SENSE_SCHEMA = {
     "type": "object",
     "properties": {
         "done_task_ids": {
-            "type": "array", "items": {"type": "integer"},
+            "type": "array",
+            "items": {"type": "integer"},
             "description": "ids from the pending list the user clearly reports as finished",
         },
         "maybe_done_task_ids": {
-            "type": "array", "items": {"type": "integer"},
+            "type": "array",
+            "items": {"type": "integer"},
             "description": "ids that MIGHT be what the user finished, but it is unclear",
         },
         "commitments": {
@@ -139,10 +168,11 @@ _SENSE_SCHEMA = {
             "items": {
                 "type": "object",
                 "properties": {
-                    "text": {"type": "string",
-                             "description": "the user's own future action, short imperative"},
-                    "when": {"type": "string",
-                             "description": "time phrase if stated, else empty"},
+                    "text": {
+                        "type": "string",
+                        "description": "the user's own future action, short imperative",
+                    },
+                    "when": {"type": "string", "description": "time phrase if stated, else empty"},
                 },
                 "required": ["text"],
             },
@@ -173,8 +203,8 @@ _WHEN_SCHEMA = {
     "properties": {
         "datetime": {
             "type": "string",
-            "description": "resolved local time as YYYY-MM-DD HH:MM, or \"\" if the "
-                           "phrase does not describe a time",
+            "description": 'resolved local time as YYYY-MM-DD HH:MM, or "" if the '
+            "phrase does not describe a time",
         }
     },
     "required": ["datetime"],
@@ -211,7 +241,10 @@ TOOL_SPECS: list[ToolSpec] = [
             "type": "object",
             "properties": {
                 "title": {"type": "string", "description": "short imperative title"},
-                "when": {"type": "string", "description": "deadline/reminder time phrase, optional"},
+                "when": {
+                    "type": "string",
+                    "description": "deadline/reminder time phrase, optional",
+                },
                 "priority": {"type": "string", "enum": ["low", "medium", "high"]},
                 "notes": {"type": "string"},
             },
@@ -221,7 +254,7 @@ TOOL_SPECS: list[ToolSpec] = [
     ToolSpec(
         name="list_tasks",
         description="Current task overview, rendered verbatim from the database. "
-                    "Show it to the user as-is; never summarize items away.",
+        "Show it to the user as-is; never summarize items away.",
         input_schema={"type": "object", "properties": {}},
     ),
     ToolSpec(name="complete_task", description="Mark a task done.", input_schema=_ref_schema()),
@@ -232,10 +265,16 @@ TOOL_SPECS: list[ToolSpec] = [
             {"until": {"type": "string", "description": "time phrase, e.g. 'tomorrow at 9'"}}
         ),
     ),
-    ToolSpec(name="cancel_task", description="Cancel a task the user no longer wants.",
-             input_schema=_ref_schema()),
-    ToolSpec(name="restore_task", description="Revive a dropped or cancelled task.",
-             input_schema=_ref_schema()),
+    ToolSpec(
+        name="cancel_task",
+        description="Cancel a task the user no longer wants.",
+        input_schema=_ref_schema(),
+    ),
+    ToolSpec(
+        name="restore_task",
+        description="Revive a dropped or cancelled task.",
+        input_schema=_ref_schema(),
+    ),
     ToolSpec(
         name="look_at_screen",
         description=(
@@ -245,10 +284,31 @@ TOOL_SPECS: list[ToolSpec] = [
         ),
         input_schema={
             "type": "object",
-            "properties": {"question": {
-                "type": "string",
-                "description": "what to look for / answer about the screen",
-            }},
+            "properties": {
+                "question": {
+                    "type": "string",
+                    "description": "what to look for / answer about the screen",
+                }
+            },
+        },
+    ),
+    ToolSpec(
+        name="recent_screen_activity",
+        description=(
+            "What your friend has actually been doing on screen recently, from the local "
+            "observation log: which apps, which windows, how long, and what category. Use "
+            "it when they ask what they were doing, where their time went, or when you "
+            "need context about what they are working on right now. This is sensor data, "
+            "not their words — react to it, never read it back to them verbatim."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "hours": {
+                    "type": "integer",
+                    "description": "How far back to look. Default 3.",
+                }
+            },
         },
     ),
     ToolSpec(
@@ -297,16 +357,19 @@ TOOL_SPECS: list[ToolSpec] = [
             "type": "object",
             "properties": {
                 "title": {"type": "string", "description": "short title for the routine"},
-                "cadence": {"type": "string", "enum": ["daily", "weekdays", "monthly"],
-                            "description": "how often it repeats"},
-                "weekdays": {"type": "array", "items": {"type": "integer"},
-                             "description": "0=Mon..6=Sun, used with 'weekdays' cadence"},
-                "time_of_day": {"type": "string",
-                                "description": "reminder time as HH:MM"},
-                "day_of_month": {"type": "integer",
-                                 "description": "which day for monthly (1-31)"},
-                "deadline_time": {"type": "string",
-                                  "description": "hard deadline as HH:MM"},
+                "cadence": {
+                    "type": "string",
+                    "enum": ["daily", "weekdays", "monthly"],
+                    "description": "how often it repeats",
+                },
+                "weekdays": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "description": "0=Mon..6=Sun, used with 'weekdays' cadence",
+                },
+                "time_of_day": {"type": "string", "description": "reminder time as HH:MM"},
+                "day_of_month": {"type": "integer", "description": "which day for monthly (1-31)"},
+                "deadline_time": {"type": "string", "description": "hard deadline as HH:MM"},
                 "notes": {"type": "string"},
             },
             "required": ["title"],
@@ -381,14 +444,12 @@ TOOL_SPECS: list[ToolSpec] = [
             "properties": {
                 "title": {"type": "string", "description": "short title"},
                 "description": {"type": "string"},
-                "condition": {"type": "string",
-                              "description": "goal condition description"},
-                "target_count": {"type": "integer",
-                                 "description": "total days needed to achieve"},
-                "target_streak": {"type": "integer",
-                                  "description": "consecutive days needed"},
+                "condition": {"type": "string", "description": "goal condition description"},
+                "target_count": {"type": "integer", "description": "total days needed to achieve"},
+                "target_streak": {"type": "integer", "description": "consecutive days needed"},
                 "linked_routine_ids": {
-                    "type": "array", "items": {"type": "integer"},
+                    "type": "array",
+                    "items": {"type": "integer"},
                     "description": "routine ids to auto-sync from",
                 },
             },
@@ -458,13 +519,20 @@ TOOL_SPECS: list[ToolSpec] = [
             "type": "object",
             "properties": {
                 "title": {"type": "string", "description": "short title"},
-                "rule_type": {"type": "string", "enum": ["time", "screen", "custom"],
-                              "description": "rule category"},
-                "condition": {"type": "string",
-                              "description": "e.g. 'after 22:00', 'before 08:30', 'between 09:00 and 17:00'"},
+                "rule_type": {
+                    "type": "string",
+                    "enum": ["time", "screen", "custom"],
+                    "description": "rule category",
+                },
+                "condition": {
+                    "type": "string",
+                    "description": "e.g. 'after 22:00', 'before 08:30', 'between 09:00 and 17:00'",
+                },
                 "message": {"type": "string", "description": "what to say when triggered"},
-                "cooldown_minutes": {"type": "integer",
-                                     "description": "minutes before it can fire again"},
+                "cooldown_minutes": {
+                    "type": "integer",
+                    "description": "minutes before it can fire again",
+                },
             },
             "required": ["title", "rule_type", "condition"],
         },
@@ -518,8 +586,7 @@ TOOL_SPECS: list[ToolSpec] = [
         input_schema={
             "type": "object",
             "properties": {
-                "limit": {"type": "integer",
-                          "description": "how many entries (default 20)"},
+                "limit": {"type": "integer", "description": "how many entries (default 20)"},
             },
         },
     ),
@@ -529,8 +596,11 @@ TOOL_SPECS: list[ToolSpec] = [
         input_schema={
             "type": "object",
             "properties": {
-                "period": {"type": "string", "enum": ["today", "7d", "all"],
-                           "description": "time window (default 'all')"},
+                "period": {
+                    "type": "string",
+                    "enum": ["today", "7d", "all"],
+                    "description": "time window (default 'all')",
+                },
             },
         },
     ),
@@ -562,8 +632,7 @@ TOOL_SPECS: list[ToolSpec] = [
         input_schema={
             "type": "object",
             "properties": {
-                "hours": {"type": "integer",
-                           "description": "hours to stay quiet (default 24)"},
+                "hours": {"type": "integer", "description": "hours to stay quiet (default 24)"},
             },
         },
     ),
@@ -617,13 +686,15 @@ TOOL_SPECS: list[ToolSpec] = [
 def _tool_definitions() -> list[ToolDefinition]:
     """Header-only mirrors of TOOL_SPECS so the rendered prompt names them."""
     return [
-        ToolDefinition(header=ToolDefinitionHeader(
-            name=ts.name,
-            description=ts.description,
-            usage_explanation_short=ts.name.replace("_", " "),
-            usage_explanation_long=ts.description,
-            rules=[],
-        ))
+        ToolDefinition(
+            header=ToolDefinitionHeader(
+                name=ts.name,
+                description=ts.description,
+                usage_explanation_short=ts.name.replace("_", " "),
+                usage_explanation_long=ts.description,
+                rules=[],
+            )
+        )
         for ts in TOOL_SPECS
     ]
 
@@ -729,7 +800,8 @@ class PonyBrain:
             if kind == FAST:
                 agent = AgentDefinition(
                     header=AgentHeader(
-                        agent_id="pony", name=character.name,
+                        agent_id="pony",
+                        name=character.name,
                         description="desktop pony assistant, fast chat front-end",
                     ),
                     usage_explanation_short="pony chat",
@@ -746,14 +818,15 @@ class PonyBrain:
             else:
                 prompts = {
                     SLOW: "You are a careful, thorough analyst. Answer completely "
-                          "and concretely; structure long answers.",
+                    "and concretely; structure long answers.",
                     VISION: "You describe screenshots accurately and concisely. "
-                            "Focus on what the user asked about; transcribe "
-                            "relevant text exactly.",
+                    "Focus on what the user asked about; transcribe "
+                    "relevant text exactly.",
                 }
                 agent = AgentDefinition(
                     header=AgentHeader(
-                        agent_id=f"pony-{kind}", name=f"pony-{kind}",
+                        agent_id=f"pony-{kind}",
+                        name=f"pony-{kind}",
                         description=f"{kind} lane",
                     ),
                     usage_explanation_short=kind,
@@ -767,9 +840,11 @@ class PonyBrain:
             self._specs[key] = spec
         spec = self._specs[key]
         if kind == FAST and self._mcp is not None:
-            spec = spec.model_copy(update={
-                "tools": tuple(TOOL_SPECS) + tuple(self._mcp_tool_specs()),
-            })
+            spec = spec.model_copy(
+                update={
+                    "tools": tuple(TOOL_SPECS) + tuple(self._mcp_tool_specs()),
+                }
+            )
         return spec
 
     def _mcp_tool_specs(self) -> list[ToolSpec]:
@@ -815,12 +890,20 @@ class PonyBrain:
 
     def _sensor_spec(self, system_prompt: str, agent_id: str):
         """A fast-model spec with a minimal prompt — the 'small fast call'."""
-        return self._spec(FAST).model_copy(update={
-            "system_prompt": system_prompt, "agent_id": agent_id, "tools": ()},
+        return self._spec(FAST).model_copy(
+            update={"system_prompt": system_prompt, "agent_id": agent_id, "tools": ()},
         )
 
-    def _run(self, spec, user_input, *, tool_runner=None, history=None,
-             output_schema: dict | None = None, max_tool_rounds: int | None = None):
+    def _run(
+        self,
+        spec,
+        user_input,
+        *,
+        tool_runner=None,
+        history=None,
+        output_schema: dict | None = None,
+        max_tool_rounds: int | None = None,
+    ):
         if output_schema is not None:
             spec = spec.model_copy(update={"output_schema": output_schema})
         kwargs: dict[str, Any] = {
@@ -883,31 +966,37 @@ class PonyBrain:
                 f"your own assumptions:\n" + "\n".join(guard_notes) + "]"
             )
         history = chat_history(
-            self.store.recent_messages(
-                self.config.llm.history_limit, with_source=True
-            )[:-1]
+            self.store.recent_messages(self.config.llm.history_limit, with_source=True)[:-1]
         )
         # Inject onboarding context note into system prompt when active
         spec = self._spec(FAST)
         onboarding_note = self._onboarding_context_note()
         if onboarding_note:
-            spec = spec.model_copy(update={
-                "system_prompt": spec.system_prompt + "\n\n" + onboarding_note,
-            })
+            spec = spec.model_copy(
+                update={
+                    "system_prompt": spec.system_prompt + "\n\n" + onboarding_note,
+                }
+            )
         mcp_note = self._mcp_context_note()
         if mcp_note:
-            spec = spec.model_copy(update={
-                "system_prompt": spec.system_prompt + "\n\n" + mcp_note,
-            })
+            spec = spec.model_copy(
+                update={
+                    "system_prompt": spec.system_prompt + "\n\n" + mcp_note,
+                }
+            )
         if self._skills is not None:
             skills_catalog = self._skills.catalog()
             if skills_catalog:
-                spec = spec.model_copy(update={
-                    "system_prompt": spec.system_prompt + "\n\n" + skills_catalog,
-                })
+                spec = spec.model_copy(
+                    update={
+                        "system_prompt": spec.system_prompt + "\n\n" + skills_catalog,
+                    }
+                )
         result = self._run(
-            spec, user_turn,
-            tool_runner=self._tool_runner, history=history,
+            spec,
+            user_turn,
+            tool_runner=self._tool_runner,
+            history=history,
         )
         reply = result.output_text.strip() or "…*ears droop* something went wrong in my head."
         if result.error:
@@ -977,7 +1066,10 @@ class PonyBrain:
                     micro = bool(content_tokens(title) & _MICRO_HINTS)
                     when = now + (_COMMITMENT_TTL_MICRO if micro else _COMMITMENT_TTL)
                 task, created = self.store.add(
-                    title, deadline=when, source="commitment", actor="sensor",
+                    title,
+                    deadline=when,
+                    source="commitment",
+                    actor="sensor",
                 )
                 if created:
                     notes.append(
@@ -1022,9 +1114,7 @@ class PonyBrain:
             if status == "CONNECTED":
                 tool_label = "tool" if len(tool_names) == 1 else "tools"
                 details = ", ".join(tool_names) if tool_names else "no tools"
-                lines.append(
-                    f"{name}: CONNECTED ({len(tool_names)} {tool_label}) — {details}"
-                )
+                lines.append(f"{name}: CONNECTED ({len(tool_names)} {tool_label}) — {details}")
             elif state.last_error:
                 lines.append(f"{name}: {status} — {state.last_error}")
             else:
@@ -1066,8 +1156,10 @@ class PonyBrain:
         if when_raw := str(args.get("when", "")).strip():
             deadline = self.parse_when(when_raw)
             if deadline is None:
-                return (f"ERROR: could not understand the time {when_raw!r} — ask the "
-                        f"user to clarify when they mean")
+                return (
+                    f"ERROR: could not understand the time {when_raw!r} — ask the "
+                    f"user to clarify when they mean"
+                )
         task, created = self.store.add(
             title,
             notes=str(args.get("notes", "")),
@@ -1077,9 +1169,11 @@ class PonyBrain:
         )
         if created and self._activity is not None:
             self._activity.record(
-                "task_added", actor="pony",
+                "task_added",
+                actor="pony",
                 detail=f"Task '{task.title}' added (#{task.id})",
-                ref_type="task", ref_id=str(task.id),
+                ref_type="task",
+                ref_id=str(task.id),
             )
         if not created:
             return f"already tracking that one: {task.describe()}"
@@ -1107,9 +1201,11 @@ class PonyBrain:
         done = self.store.complete(task, actor="pony")
         if self._activity is not None:
             self._activity.record(
-                "task_completed", actor="pony",
+                "task_completed",
+                actor="pony",
                 detail=f"Task '{task.title}' completed",
-                ref_type="task", ref_id=str(task.id),
+                ref_type="task",
+                ref_id=str(task.id),
             )
         return f"done ✅ {done.describe()}"
 
@@ -1120,9 +1216,11 @@ class PonyBrain:
         cancelled = self.store.cancel(task, actor="pony")
         if self._activity is not None:
             self._activity.record(
-                "task_cancelled", actor="pony",
+                "task_cancelled",
+                actor="pony",
                 detail=f"Task '{task.title}' cancelled",
-                ref_type="task", ref_id=str(task.id),
+                ref_type="task",
+                ref_id=str(task.id),
             )
         return f"cancelled: {cancelled.describe()}"
 
@@ -1136,9 +1234,11 @@ class PonyBrain:
         snoozed = self.store.snooze(task, until)
         if self._activity is not None:
             self._activity.record(
-                "task_snoozed", actor="pony",
+                "task_snoozed",
+                actor="pony",
                 detail=f"Task '{task.title}' snoozed to {until:%Y-%m-%d %H:%M}",
-                ref_type="task", ref_id=str(task.id),
+                ref_type="task",
+                ref_id=str(task.id),
             )
         return f"snoozed until {until:%a %d %b %H:%M}: {snoozed.describe()}"
 
@@ -1147,9 +1247,11 @@ class PonyBrain:
         task = self.store.restore(ref)
         if task is not None and self._activity is not None:
             self._activity.record(
-                "task_restored", actor="pony",
+                "task_restored",
+                actor="pony",
                 detail=f"Task '{task.title}' restored",
-                ref_type="task", ref_id=str(task.id),
+                ref_type="task",
+                ref_id=str(task.id),
             )
         return f"restored: {task.describe()}" if task else f"no dropped task matches {ref!r}"
 
@@ -1170,9 +1272,11 @@ class PonyBrain:
         )
         if self._activity is not None:
             self._activity.record(
-                "routine_added", actor="pony",
+                "routine_added",
+                actor="pony",
                 detail=f"Routine '{routine.title}' added (#{routine.id})",
-                ref_type="routine", ref_id=str(routine.id),
+                ref_type="routine",
+                ref_id=str(routine.id),
             )
         return f"added routine #{routine.id}: {routine.title} ({routine.cadence})"
 
@@ -1226,9 +1330,11 @@ class PonyBrain:
             return f"no routine #{rid}"
         if self._activity is not None:
             self._activity.record(
-                "routine_edited", actor="pony",
+                "routine_edited",
+                actor="pony",
                 detail=f"Routine '{updated.title}' edited",
-                ref_type="routine", ref_id=str(updated.id),
+                ref_type="routine",
+                ref_id=str(updated.id),
             )
         return f"updated routine #{updated.id}: {updated.title}"
 
@@ -1271,9 +1377,11 @@ class PonyBrain:
         archived = self._stores["routines"].archive(rid)
         if self._activity is not None:
             self._activity.record(
-                "routine_archived", actor="pony",
+                "routine_archived",
+                actor="pony",
                 detail=f"Routine '{archived.title}' archived",
-                ref_type="routine", ref_id=str(archived.id),
+                ref_type="routine",
+                ref_id=str(archived.id),
             )
         return f"archived routine #{archived.id}: {archived.title}"
 
@@ -1293,9 +1401,11 @@ class PonyBrain:
         )
         if self._activity is not None:
             self._activity.record(
-                "goal_added", actor="pony",
+                "goal_added",
+                actor="pony",
                 detail=f"Goal '{goal.title}' added (#{goal.id})",
-                ref_type="goal", ref_id=str(goal.id),
+                ref_type="goal",
+                ref_id=str(goal.id),
             )
         parts = [f"added goal #{goal.id}: {goal.title}"]
         if goal.target_count is not None:
@@ -1343,8 +1453,7 @@ class PonyBrain:
         engine = self._goal_engine
         if engine is None:
             return "ERROR: goal engine not available"
-        entry = engine.check_in(gid, date.today(), met=bool(met),
-                                note=str(args.get("note", "")))
+        entry = engine.check_in(gid, date.today(), met=bool(met), note=str(args.get("note", "")))
         status = "met" if entry.met else "not met"
         return f"goal check-in recorded: {status}"
 
@@ -1416,9 +1525,11 @@ class PonyBrain:
         )
         if self._activity is not None:
             self._activity.record(
-                "rule_added", actor="pony",
+                "rule_added",
+                actor="pony",
                 detail=f"Rule '{rule.title}' added (#{rule.id})",
-                ref_type="accountability_rule", ref_id=str(rule.id),
+                ref_type="accountability_rule",
+                ref_id=str(rule.id),
             )
         return f"added rule #{rule.id}: {rule.title} ({rule_type})"
 
@@ -1431,8 +1542,7 @@ class PonyBrain:
             status = "enabled" if r.enabled else "DISABLED"
             cooldown = f" cooldown={r.cooldown_minutes}m" if r.cooldown_minutes else ""
             lines.append(
-                f"  • [#{r.id}] {r.title} — {r.rule_type}: {r.condition} "
-                f"[{status}]{cooldown}"
+                f"  • [#{r.id}] {r.title} — {r.rule_type}: {r.condition} [{status}]{cooldown}"
             )
         return "\n".join(lines)
 
@@ -1446,15 +1556,19 @@ class PonyBrain:
                 title=str(args.get("title", "")).strip() or None,
                 condition=str(args.get("condition", "")).strip() or None,
                 message=str(args.get("message", "")) or None,
-                cooldown_minutes=int(args["cooldown_minutes"]) if "cooldown_minutes" in args else None,
+                cooldown_minutes=int(args["cooldown_minutes"])
+                if "cooldown_minutes" in args
+                else None,
             )
         except KeyError:
             return f"no rule #{rid}"
         if self._activity is not None:
             self._activity.record(
-                "rule_edited", actor="pony",
+                "rule_edited",
+                actor="pony",
                 detail=f"Rule '{updated.title}' edited",
-                ref_type="accountability_rule", ref_id=str(updated.id),
+                ref_type="accountability_rule",
+                ref_id=str(updated.id),
             )
         return f"updated rule #{updated.id}: {updated.title}"
 
@@ -1469,9 +1583,11 @@ class PonyBrain:
         status = "enabled" if toggled.enabled else "disabled"
         if self._activity is not None:
             self._activity.record(
-                "rule_toggled", actor="pony",
+                "rule_toggled",
+                actor="pony",
                 detail=f"Rule '{toggled.title}' {status}",
-                ref_type="accountability_rule", ref_id=str(toggled.id),
+                ref_type="accountability_rule",
+                ref_id=str(toggled.id),
             )
         return f"rule #{toggled.id} '{toggled.title}' {status}"
 
@@ -1486,9 +1602,11 @@ class PonyBrain:
         self._stores["rules"].delete(rid)
         if self._activity is not None:
             self._activity.record(
-                "rule_deleted", actor="pony",
+                "rule_deleted",
+                actor="pony",
                 detail=f"Rule '{rule.title}' deleted",
-                ref_type="accountability_rule", ref_id=str(rule.id),
+                ref_type="accountability_rule",
+                ref_id=str(rule.id),
             )
         return f"deleted rule #{rule.id}: {rule.title}"
 
@@ -1516,10 +1634,7 @@ class PonyBrain:
             return f"No token usage data for {period}."
         lines = [f"Token usage ({period}):"]
         for row in summary:
-            lines.append(
-                f"  • {row['lane']}: {row['total_tokens']} tokens "
-                f"({row['count']} calls)"
-            )
+            lines.append(f"  • {row['lane']}: {row['total_tokens']} tokens ({row['count']} calls)")
         return "\n".join(lines)
 
     # ── onboarding tools ─────────────────────────────────────────────
@@ -1561,6 +1676,7 @@ class PonyBrain:
     def _onboarding_manager(self):
         """Lazy-access onboarding manager."""
         from .onboarding import OnboardingManager
+
         return OnboardingManager(self.store)
 
     def _onboarding_context_note(self) -> str | None:
@@ -1599,8 +1715,10 @@ class PonyBrain:
 
     def _tool_look_at_screen(self, args: dict) -> str:
         if not self.config.screenshot_enabled:
-            return ("ERROR: screen peeking is disabled — the user can turn it on in "
-                    "settings (or config.yaml: screenshot_enabled)")
+            return (
+                "ERROR: screen peeking is disabled — the user can turn it on in "
+                "settings (or config.yaml: screenshot_enabled)"
+            )
         if self.screenshot_fn is None:
             return "ERROR: no screen available (running headless?)"
         png = self.screenshot_fn()
@@ -1610,21 +1728,40 @@ class PonyBrain:
         b64 = base64.b64encode(png).decode()
         result = self._run(
             self._spec(VISION),
-            [{
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": question},
-                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
-                ],
-            }],
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": question},
+                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+                    ],
+                }
+            ],
         )
         return result.output_text or f"ERROR: vision call failed ({result.error})"
+
+    def _tool_recent_screen_activity(self, args: dict) -> str:
+        hours = max(1, min(24, int(args.get("hours") or 3)))
+        observations = self._stores["observations"]
+        if not self.config.observation.enabled and observations.count() == 0:
+            return (
+                "ERROR: screen observation is disabled — ask your friend to turn it on in "
+                "Settings if they want you to know what they have been doing."
+            )
+        now = datetime.now()
+        return render_activity_digest(
+            observations.since(now - timedelta(hours=hours)),
+            now=now,
+            hours=hours,
+        )
 
     def _tool_recent_logs(self, args: dict) -> str:
         """Tail configured log files and delegate the question to the FAST lane."""
         if not self.config.logwatch.enabled:
-            return ("ERROR: log watching is disabled — the user can turn it on in "
-                    "settings (or config.yaml: logwatch.enabled)")
+            return (
+                "ERROR: log watching is disabled — the user can turn it on in "
+                "settings (or config.yaml: logwatch.enabled)"
+            )
         question = str(args.get("question", "")) or "Summarize what happened recently."
         log_text = (
             self.log_fn() if self.log_fn is not None else read_recent_logs(self.config.logwatch)
