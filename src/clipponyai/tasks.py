@@ -21,6 +21,7 @@ hard-won rules kept intact:
 
 from __future__ import annotations
 
+import logging
 import re
 import sqlite3
 import threading
@@ -28,7 +29,23 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 
+log = logging.getLogger("clipponyai.tasks")
+
 ISO = "%Y-%m-%d %H:%M:%S"
+
+# Surfaces the pony speaks through *unprompted* — nudges and reflections, as
+# opposed to 'desktop'/'telegram' replies to something the user actually said.
+# It lives here because this is where the messages table and its source column
+# are defined; brain.py re-exports it for the model-facing history builders.
+PROACTIVE_SOURCES = frozenset({"reminder", "reflection"})
+
+# One-time cleanup of a historical failure, keyed in the meta table so it runs
+# once per database.  Bump the suffix only if the repair itself changes.
+_ECHO_REPAIR_META = "messages_echo_repair_v1"
+
+# Every proactive utterance is prefixed with this in awareness.py / the nudge
+# delivery path, so it is the marker for pre-persona sensor prose.
+_NUDGE_PREFIX = "\U0001f434"
 
 _STOPWORDS = {
     "a",
@@ -501,6 +518,65 @@ class TaskStore:
                 message["at"] = datetime.strptime(row["at"], ISO)
             result.append(message)
         return result
+
+    def repair_echoed_messages(self) -> int:
+        """Delete history the chat model was demonstrably learning to imitate.
+
+        Two provable classes of row, and nothing else:
+
+        1. An ordinary reply whose text is *character for character* something
+           the pony had already said unprompted.  Those are echoes: the chat
+           lane copied a nudge out of its own window and the copy was saved
+           with source='desktop', where no proactive filter could ever reach
+           it, so it fed the next turn and the next.
+        2. Nudges written before the persona pass existed — third-person
+           sensor prose ("🐴 The user is browsing Reddit, which falls under…").
+           That is the wording the copies were made from, and it is wording
+           the pony no longer produces.
+
+        Runs once per database (guarded by a meta key) and returns the number
+        of rows removed.  Order matters: (2) destroys the evidence (1) needs.
+        """
+        if self.get_meta(_ECHO_REPAIR_META) is not None:
+            return 0
+
+        placeholders = ",".join("?" * len(PROACTIVE_SOURCES))
+        sources = tuple(sorted(PROACTIVE_SOURCES))
+        with self._lock:
+            echoes = self._conn.execute(
+                f"""
+                DELETE FROM messages
+                 WHERE role = 'assistant'
+                   AND source NOT IN ({placeholders})
+                   AND EXISTS (SELECT 1 FROM messages p
+                                WHERE p.role = 'assistant'
+                                  AND p.source IN ({placeholders})
+                                  AND p.content = messages.content
+                                  AND p.id < messages.id)
+                """,
+                sources + sources,
+            ).rowcount
+            prose = self._conn.execute(
+                f"""
+                DELETE FROM messages
+                 WHERE role = 'assistant'
+                   AND source IN ({placeholders})
+                   AND content LIKE ?
+                """,
+                (*sources, f"{_NUDGE_PREFIX} The user %"),
+            ).rowcount
+            self._conn.commit()
+
+        removed = echoes + prose
+        self.set_meta(_ECHO_REPAIR_META, str(removed))
+        if removed:
+            log.info(
+                "message history repaired: removed %d echoed replies and %d "
+                "pre-persona sensor nudges",
+                echoes,
+                prose,
+            )
+        return removed
 
     # ── key/value meta store ─────────────────────────────────────────
     def get_meta(self, key: str, default: str | None = None) -> str | None:

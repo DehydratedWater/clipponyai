@@ -49,6 +49,10 @@ class Core:
     ) -> None:
         self.config = config
         self.store = TaskStore(db_path())
+        # Deliberately here and not in TaskStore.__init__: this deletes rows,
+        # and that belongs at the application boundary where it happens once
+        # against the real database, not implicitly in every in-memory store.
+        self.store.repair_echoed_messages()
         # Accountability stores (routines, goals, activity, …)
         self.accountability = get_stores(self.store)
         observation_store = self.accountability["observations"]

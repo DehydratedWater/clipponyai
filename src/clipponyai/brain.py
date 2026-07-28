@@ -54,7 +54,7 @@ from .logwatch import read_recent_logs
 from .providers import FAST, SLOW, VISION, make_live_profile
 from .routines import RoutineEngine, current_streak
 from .rules import RuleEngine
-from .tasks import TaskStore, content_tokens
+from .tasks import PROACTIVE_SOURCES, TaskStore, content_tokens
 from .timeparse import parse_when as parse_when_offline
 from .token_capture import (
     RawResponseOpenAICompatClient,
@@ -113,21 +113,39 @@ def _is_assistant_command(text: str) -> bool:
     return normalized.startswith(_ASSISTANT_COMMAND_PREFIXES)
 
 
-# Proactive messages — reminders and reflections — are the pony
-# speaking into the one shared conversation, so they land in the chat lane's
-# history as ordinary assistant turns. Unbounded, they take the window over: an
-# awareness nudge every cooldown fills it within hours, and the fast model then
-# continues the pattern it sees most instead of answering — replying to "what
-# sport have I been doing?" with another screen observation. Keep only the last
-# few per source so "done!" still answers the relevant nudge, without one
-# proactive channel evicting another. Measured on the local fast lane against a
-# 40-message history that was 21 nudges: parroted 11/15 unfiltered, 0/8 at this
-# cap, 3/8 at three. Two sources can now contribute four messages, but that
-# measurement used raw third-person analyst prose; awareness now rewrites every
-# such note into short, first-person, in-persona speech, removing the dominant
-# off-pattern the chat model continued.
-PROACTIVE_SOURCES = frozenset({"reminder", "reflection"})
-PROACTIVE_HISTORY_LIMIT = 2
+# Proactive messages — reminders and reflections — are the pony speaking into
+# the one shared conversation, so they are stored in the same messages table.
+# They must never reach the model as *assistant turns*, though: an assistant
+# turn is an example of how to answer, and the fast lane imitates the pattern
+# it sees most. Measured on the local fast lane against a 40-message history
+# that was 21 nudges: parroted 11/15 unfiltered, 3/8 with a keep-the-last-three
+# cap, 0/8 at two.
+#
+# A count cap was not enough. It throttled the nudges themselves but not their
+# echoes: a parroted reply is saved by _respond_sync with the surface it was
+# asked on ('desktop'), so it is indistinguishable from a genuine answer, no
+# proactive filter can reach it, and it feeds the next turn — a loop that
+# repeated one stale nudge for four days. A count also has no age bound, so a
+# four-day-old observation was still offered as recent context.
+#
+# So the assistant channel carries only real exchanges, and the pony's own
+# unprompted lines go into the system prompt as a labelled, time-bounded note
+# (recent_nudge_note). Nothing is lost: "done!" still has its referent, and
+# there is no longer anything shaped like an answer to copy.
+#
+# PROACTIVE_SOURCES itself is defined in .tasks, next to the messages table it
+# describes, and imported above; reflection.py reads it from here.
+
+# How long a nudge stays worth mentioning. Matches AwarenessConfig.cooldown_
+# minutes: once the pony is willing to speak again, the previous nudge has no
+# conversational referent left.
+NUDGE_NOTE_WINDOW_MINUTES = 30
+NUDGE_NOTE_LIMIT = 3
+_NUDGE_NOTE_MAX_CHARS = 200
+
+# Stored whenever a turn produces nothing, so the transcript never contains an
+# unanswered user message.
+_TURN_FAILED_REPLY = "…*ears droop* something went wrong in my head."
 
 # The same text reaches the chat lane a second way: the awareness lane writes
 # an audit row for every screen assessment — dozens an hour, each one a
@@ -144,11 +162,13 @@ AWARENESS_AUDIT_ACTIONS = frozenset(
 )
 
 
-def chat_history(messages: list[dict], keep_proactive: int = PROACTIVE_HISTORY_LIMIT) -> list[dict]:
-    """Model-facing history: every real exchange, only the last few nudges.
+def chat_history(messages: list[dict], keep_proactive: int = 0) -> list[dict]:
+    """Model-facing history: every real exchange, and by default no nudges.
 
     Takes `recent_messages(..., with_source=True)` rows and returns plain
-    role/content dicts — the API rejects anything else.
+    role/content dicts — the API rejects anything else. `keep_proactive` is
+    retained for callers that genuinely want the last few per source; the chat
+    lane passes nothing and gets a nudge-free transcript.
     """
     by_source: dict[str, list[int]] = {}
     for i, message in enumerate(messages):
@@ -163,6 +183,47 @@ def chat_history(messages: list[dict], keep_proactive: int = PROACTIVE_HISTORY_L
         for i, m in enumerate(messages)
         if i not in dropped
     ]
+
+
+def recent_nudge_note(
+    messages: list[dict],
+    *,
+    now: datetime,
+    window_minutes: int = NUDGE_NOTE_WINDOW_MINUTES,
+    limit: int = NUDGE_NOTE_LIMIT,
+) -> str:
+    """The pony's own recent unprompted lines, as a system-prompt block.
+
+    This is where proactive messages go now that they are no longer assistant
+    turns — stated as something she said, not modelled as something to say.
+    Takes `recent_messages(..., with_source=True, with_at=True)` rows and
+    returns "" when nothing is recent enough to be worth mentioning.
+    """
+    cutoff = now - timedelta(minutes=max(0, window_minutes))
+    recent = [
+        message
+        for message in messages
+        if message.get("source") in PROACTIVE_SOURCES
+        and message.get("role") == "assistant"
+        and isinstance(message.get("at"), datetime)
+        and message["at"] >= cutoff
+    ][-max(0, limit) :]
+    if not recent:
+        return ""
+
+    lines = [
+        "## Your recent unprompted messages",
+        "You said these on your own, without being asked. They are not part of the",
+        "conversation you are answering now — never repeat them or reuse their wording.",
+        "If your friend is replying to one of them, answer that.",
+    ]
+    for message in recent:
+        at: datetime = message["at"]
+        minutes = max(0, int((now - at).total_seconds() // 60))
+        ago = "just now" if minutes < 1 else f"{minutes} min ago"
+        text = " ".join(str(message["content"]).split())[:_NUDGE_NOTE_MAX_CHARS]
+        lines.append(f'- {at:%H:%M} ({ago}): "{text}"')
+    return "\n".join(lines)
 
 
 # ── sensor schemas & prompts (small fast calls, tiny context) ─────────
@@ -1035,11 +1096,20 @@ class PonyBrain:
                 f"{text}\n\n[system note — real database state, trust this over "
                 f"your own assumptions:\n" + "\n".join(guard_notes) + "]"
             )
-        history = chat_history(
-            self.store.recent_messages(self.config.llm.history_limit, with_source=True)[:-1]
-        )
+        # [:-1] drops the user turn saved above — it is passed separately.
+        rows = self.store.recent_messages(
+            self.config.llm.history_limit, with_source=True, with_at=True
+        )[:-1]
+        history = chat_history(rows)
         # Inject onboarding context note into system prompt when active
         spec = self._spec(FAST)
+        nudge_note = recent_nudge_note(rows, now=datetime.now())
+        if nudge_note:
+            spec = spec.model_copy(
+                update={
+                    "system_prompt": spec.system_prompt + "\n\n" + nudge_note,
+                }
+            )
         onboarding_note = self._onboarding_context_note()
         if onboarding_note:
             spec = spec.model_copy(
@@ -1062,13 +1132,22 @@ class PonyBrain:
                         "system_prompt": spec.system_prompt + "\n\n" + skills_catalog,
                     }
                 )
-        result = self._run(
-            spec,
-            user_turn,
-            tool_runner=self._tool_runner,
-            history=history,
-        )
-        reply = result.output_text.strip() or "…*ears droop* something went wrong in my head."
+        try:
+            result = self._run(
+                spec,
+                user_turn,
+                tool_runner=self._tool_runner,
+                history=history,
+            )
+        except Exception:
+            # The user turn is already stored. Leaving it unanswered puts two
+            # user messages back to back in the transcript, and whatever the
+            # pony says next — a nudge, hours later — reads as the reply to a
+            # question it has nothing to do with. Close the exchange, then let
+            # the caller show its own error.
+            self.store.save_message("assistant", _TURN_FAILED_REPLY, source)
+            raise
+        reply = result.output_text.strip() or _TURN_FAILED_REPLY
         if result.error:
             log.warning("turn ended with error: %s", result.error)
         self.store.save_message("assistant", reply, source)
@@ -1775,6 +1854,9 @@ class PonyBrain:
         question = str(args.get("question", "")).strip()
         if not question:
             return "ERROR: question is required"
+        # Nudges are excluded here for the same reason the chat lane excludes
+        # them: this transcript is rendered straight into a prompt, and the
+        # SLOW lane has no more business copying sensor prose than the fast one.
         recent = chat_history(self.store.recent_messages(10, with_source=True))
         context = "\n".join(f"{m['role']}: {m['content']}" for m in recent)
         result = self._run(

@@ -1,7 +1,11 @@
 from datetime import datetime, timedelta
 
 from clipponyai.tasks import (
-    DROP_NOTICE, Task, compose_nudge, content_tokens, nudge_state,
+    DROP_NOTICE,
+    Task,
+    compose_nudge,
+    content_tokens,
+    nudge_state,
 )
 
 NOW = datetime(2026, 7, 22, 14, 0)
@@ -180,7 +184,7 @@ def test_compose_nudge_escalates_and_batches():
     ]
     msg = compose_nudge(tasks, batch_limit=3)
     assert "water plants" in msg and "did it happen?" in msg
-    assert "ping #3 on \"call dentist\"" in msg
+    assert 'ping #3 on "call dentist"' in msg
     assert "ping #8" in msg  # last template repeats with real count
     assert "extra one" not in msg and "+1 more" in msg
 
@@ -229,6 +233,62 @@ def test_message_history_can_carry_the_source(store):
         {"role": "assistant", "content": "still pending: taxes", "source": "reminder"},
         {"role": "user", "content": "done", "source": "desktop"},
     ]
+
+
+# ── one-time repair of echoed / pre-persona history ───────────────────
+NUDGE = "🐴 The user is browsing Reddit, which falls under the social media category."
+
+
+def test_repair_removes_echoes_and_pre_persona_nudges(store):
+    """The exact failure this repair exists for: a nudge the chat lane copied
+    back at the user, saved as an ordinary reply where no filter could reach
+    it, plus the third-person prose the copy was made from."""
+    store.save_message("assistant", NUDGE, "reminder")
+    store.save_message("user", "what's up?", "desktop")
+    store.save_message("assistant", NUDGE, "desktop")  # the echo
+
+    assert store.repair_echoed_messages() == 2
+    assert store.recent_messages(10, with_source=True) == [
+        {"role": "user", "content": "what's up?", "source": "desktop"},
+    ]
+
+
+def test_repair_keeps_real_replies_that_merely_share_words(store):
+    store.save_message("assistant", NUDGE, "reminder")
+    store.save_message(
+        "assistant", "you've been on Reddit a while — want me to set a timer?", "desktop"
+    )
+
+    assert store.repair_echoed_messages() == 1
+    assert [m["content"] for m in store.recent_messages(10)] == [
+        "you've been on Reddit a while — want me to set a timer?"
+    ]
+
+
+def test_repair_keeps_proactive_messages_written_in_the_ponys_voice(store):
+    """Only pre-persona sensor prose goes. Voiced nudges are real history."""
+    store.save_message("assistant", "🐴 that's a lot of Reddit for a Tuesday!", "reminder")
+    store.save_message("assistant", '⏰ "taxes" — did it happen?', "reminder")
+
+    assert store.repair_echoed_messages() == 0
+    assert len(store.recent_messages(10)) == 2
+
+
+def test_repair_runs_once_per_database(store):
+    store.save_message("assistant", NUDGE, "reminder")
+    assert store.repair_echoed_messages() == 1
+
+    store.save_message("assistant", NUDGE, "reminder")
+    assert store.repair_echoed_messages() == 0
+    assert len(store.recent_messages(10)) == 1
+
+
+def test_repair_is_a_no_op_on_a_clean_store(store):
+    store.save_message("user", "hello", "desktop")
+    store.save_message("assistant", "hi friend! ✨", "desktop")
+
+    assert store.repair_echoed_messages() == 0
+    assert len(store.recent_messages(10)) == 2
 
 
 def test_content_tokens_drop_stopwords():

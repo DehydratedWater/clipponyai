@@ -220,7 +220,7 @@ def _cmd_doctor(_args) -> int:
         print("  awareness: off (opt-in via awareness.enabled + screenshot_enabled)")
 
     from .accountability import get_stores
-    from .tasks import TaskStore
+    from .tasks import _ECHO_REPAIR_META, TaskStore
 
     doctor_store = TaskStore(db_path())
     try:
@@ -277,6 +277,12 @@ def _cmd_doctor(_args) -> int:
                 "  reflection: off "
                 f"(last run={age_text(last_run)}, last spoke={age_text(last_spoke)})"
             )
+
+        repaired = doctor_store.get_meta(_ECHO_REPAIR_META)
+        if repaired is None:
+            print("  history repair: not yet run (happens on next start)")
+        else:
+            print(f"  history repair: done ({repaired} echoed/pre-persona rows removed)")
     finally:
         doctor_store.close()
 

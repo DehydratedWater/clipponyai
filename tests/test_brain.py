@@ -163,11 +163,12 @@ def test_chat_history_keeps_newest_message_from_each_proactive_source():
     ]
 
 
-async def test_awareness_nudges_do_not_flood_the_chat_lane(make_brain, store):
-    """A stream of proactive nudges must not crowd the real conversation out
-    of the window — that is what made the fast model answer questions with
-    another screen observation instead of a reply."""
-    from clipponyai.brain import PROACTIVE_HISTORY_LIMIT
+async def test_awareness_nudges_never_become_assistant_turns(make_brain, store):
+    """An assistant turn is an example of how to answer, and the fast lane
+    imitates the pattern it sees most — that is what made it reply to "what
+    sport have I been doing?" with a verbatim copy of a screen observation.
+    Nudges belong in the system prompt, stated as something she already said."""
+    from clipponyai.brain import NUDGE_NOTE_LIMIT
 
     store.save_message("user", "old question", "desktop")
     store.save_message("assistant", "old answer", "desktop")
@@ -178,11 +179,90 @@ async def test_awareness_nudges_do_not_flood_the_chat_lane(make_brain, store):
     assert await brain.respond("what sport have I been doing?") == "an actual answer"
 
     pony = [c for c in brain._test_clients if c.spec.agent_id == "pony"][-1]
-    sent = [m["content"] for m in pony.calls[0]["messages"]]
-    assert sum(1 for m in sent if "observation" in m) == PROACTIVE_HISTORY_LIMIT
-    assert "🐴 observation 7" in sent  # the most recent nudge is still answerable
-    assert "old question" in sent and "old answer" in sent
-    assert all("source" not in m for m in pony.calls[0]["messages"])
+    messages = pony.calls[0]["messages"]
+    conversation = [m for m in messages if m["role"] != "system"]
+    system = "\n".join(m["content"] for m in messages if m["role"] == "system")
+
+    # nothing shaped like an answer to copy
+    assert not any("observation" in m["content"] for m in conversation)
+    # but the recent ones are still there to be referred to
+    assert system.count("🐴 observation") == NUDGE_NOTE_LIMIT
+    assert "🐴 observation 7" in system
+    assert "🐴 observation 4" not in system
+    # real exchanges are untouched
+    contents = [m["content"] for m in conversation]
+    assert "old question" in contents and "old answer" in contents
+    assert all("source" not in m for m in messages)
+
+
+def test_nudge_note_drops_nudges_older_than_the_window():
+    from clipponyai.brain import NUDGE_NOTE_WINDOW_MINUTES, recent_nudge_note
+
+    now = datetime(2026, 7, 28, 13, 49)
+    stale = now - timedelta(minutes=NUDGE_NOTE_WINDOW_MINUTES + 1)
+    messages = [
+        {"role": "assistant", "content": "🐴 stale", "source": "reminder", "at": stale},
+        {
+            "role": "assistant",
+            "content": "🐴 fresh",
+            "source": "reminder",
+            "at": now - timedelta(minutes=4),
+        },
+    ]
+
+    note = recent_nudge_note(messages, now=now)
+    assert "🐴 fresh" in note and "13:45 (4 min ago)" in note
+    assert "stale" not in note
+
+
+def test_nudge_note_is_empty_when_the_last_nudge_is_days_old():
+    """The exact bug: a four-day-old observation was still "one of the last
+    two" and got offered to the model as recent context."""
+    from clipponyai.brain import recent_nudge_note
+
+    now = datetime(2026, 7, 28, 13, 49)
+    messages = [
+        {
+            "role": "assistant",
+            "content": "🐴 The user is browsing Reddit.",
+            "source": "reminder",
+            "at": now - timedelta(days=4),
+        },
+        {"role": "user", "content": "what's up?", "source": "desktop", "at": now},
+    ]
+
+    assert recent_nudge_note(messages, now=now) == ""
+
+
+def test_nudge_note_ignores_ordinary_replies():
+    from clipponyai.brain import recent_nudge_note
+
+    now = datetime(2026, 7, 28, 13, 49)
+    messages = [
+        {"role": "assistant", "content": "hi friend! ✨", "source": "desktop", "at": now},
+        {"role": "user", "content": "hello", "source": "desktop", "at": now},
+    ]
+
+    assert recent_nudge_note(messages, now=now) == ""
+
+
+async def test_failed_turn_still_closes_the_exchange(make_brain, store):
+    """A user row with no reply puts two user turns back to back, and the next
+    thing the pony says — a nudge, hours later — then reads as the answer."""
+    brain = make_brain({"pony": "unused", "message-sensor": EMPTY_SENSE})
+    original_run = brain._run
+
+    def failing_run(spec, user_input, **kwargs):
+        if spec.agent_id == "pony":
+            raise RuntimeError("provider down")
+        return original_run(spec, user_input, **kwargs)
+
+    brain._run = failing_run
+    with pytest.raises(RuntimeError):
+        await brain.respond("hello?")
+
+    roles = [m["role"] for m in store.recent_messages(10)]
+    assert roles == ["user", "assistant"]
 
 
 # ── tool loop ─────────────────────────────────────────────────────────
