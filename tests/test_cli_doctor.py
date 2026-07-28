@@ -11,17 +11,21 @@ monkeypatch platform.system() and install functions. No network calls.
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 from pathlib import Path
 
+from clipponyai.accountability import get_stores
 from clipponyai.cli import main
-from clipponyai.config import Config
+from clipponyai.config import Config, db_path
+from clipponyai.tasks import TaskStore
 
 
 # ── helpers ────────────────────────────────────────────────────────────
 
 
-def _run_doctor(monkeypatch, tmp_path, platform_name: str = "Linux",
-                autostart_msg: str = "disabled") -> str:
+def _run_doctor(
+    monkeypatch, tmp_path, platform_name: str = "Linux", autostart_msg: str = "disabled"
+) -> str:
     """Run doctor with mocked platform and autostart, return stdout."""
     monkeypatch.setattr("clipponyai.install._SYSTEM", platform_name)
     monkeypatch.setattr("clipponyai.install.platform.system", lambda: platform_name)
@@ -130,7 +134,11 @@ def test_doctor_reports_logwatch_enabled_with_paths(capsys, monkeypatch, tmp_pat
 def test_doctor_reports_autostart_disabled(capsys, monkeypatch, tmp_path):
     """Doctor includes autostart status line."""
     Config().save()
-    _run_doctor(monkeypatch, tmp_path, autostart_msg="disabled (~/.config/autostart/clipponyai.desktop not found)")
+    _run_doctor(
+        monkeypatch,
+        tmp_path,
+        autostart_msg="disabled (~/.config/autostart/clipponyai.desktop not found)",
+    )
     out = capsys.readouterr().out
     assert "autostart:" in out
     assert "disabled" in out
@@ -139,7 +147,9 @@ def test_doctor_reports_autostart_disabled(capsys, monkeypatch, tmp_path):
 def test_doctor_reports_autostart_enabled(capsys, monkeypatch, tmp_path):
     """Doctor reports enabled autostart."""
     Config().save()
-    _run_doctor(monkeypatch, tmp_path, autostart_msg="enabled — ~/.config/autostart/clipponyai.desktop")
+    _run_doctor(
+        monkeypatch, tmp_path, autostart_msg="enabled — ~/.config/autostart/clipponyai.desktop"
+    )
     out = capsys.readouterr().out
     assert "autostart:" in out
     assert "enabled" in out
@@ -281,7 +291,9 @@ def test_doctor_no_network_with_local_provider(capsys, monkeypatch, tmp_path):
     config.save()
 
     # Block all HTTP
-    monkeypatch.setattr("urllib.request.urlopen", lambda *a, **kw: (_ for _ in ()).throw(ConnectionError("blocked")))
+    monkeypatch.setattr(
+        "urllib.request.urlopen", lambda *a, **kw: (_ for _ in ()).throw(ConnectionError("blocked"))
+    )
 
     _run_doctor(monkeypatch, tmp_path)
     # If we get here without raising, no network was made
@@ -376,3 +388,77 @@ def test_doctor_awareness_non_mutating(capsys, monkeypatch, tmp_path):
     assert after.awareness.cooldown_minutes == before.awareness.cooldown_minutes
     assert after.awareness.minimum_confidence == before.awareness.minimum_confidence
     assert after.screenshot_enabled == before.screenshot_enabled
+
+
+# ── doctor: observation and reflection status ─────────────────────────
+
+
+def test_doctor_reports_observation_history_and_reflection_health(capsys, monkeypatch, tmp_path):
+    config = Config()
+    config.observation.enabled = True
+    config.observation.sample_seconds = 20
+    config.reflection.enabled = True
+    config.reflection.interval_minutes = 30
+    config.save()
+
+    store = TaskStore(db_path())
+    observations = get_stores(store)["observations"]
+    now = datetime.now()
+    observations.record(
+        started_at=now - timedelta(hours=2),
+        ended_at=now - timedelta(hours=1, minutes=50),
+        source="os",
+        app="Terminal",
+        window_title="pytest",
+        category="work",
+        confidence=1.0,
+    )
+    observations.record(
+        started_at=now - timedelta(minutes=5),
+        ended_at=now,
+        source="os",
+        app="Editor",
+        window_title="cli.py",
+        category="work",
+        confidence=1.0,
+    )
+    store.set_meta("reflection_last_run", (now - timedelta(minutes=2)).isoformat())
+    store.set_meta("reflection_last_spoke", (now - timedelta(hours=3)).isoformat())
+    store.close()
+
+    _run_doctor(monkeypatch, tmp_path)
+    out = capsys.readouterr().out
+    assert "screen observation: on" in out
+    assert "sample=20s" in out
+    assert "rows=2" in out
+    assert "oldest=2h ago" in out
+    assert "newest=5m ago" in out
+    assert "reflection: on (interval=30m" in out
+    assert "last run=2m ago" in out
+    assert "quiet by default" in out
+
+
+def test_doctor_warns_when_titles_configured_but_recent_rows_empty(capsys, monkeypatch, tmp_path):
+    config = Config()
+    config.observation.enabled = True
+    config.observation.capture_window_titles = True
+    config.save()
+
+    store = TaskStore(db_path())
+    observations = get_stores(store)["observations"]
+    now = datetime.now()
+    observations.record(
+        started_at=now - timedelta(minutes=1),
+        ended_at=now,
+        source="os",
+        app="Browser",
+        window_title="",
+        category="browsing",
+        confidence=1.0,
+    )
+    store.close()
+
+    _run_doctor(monkeypatch, tmp_path)
+    out = capsys.readouterr().out
+    assert "window titles are enabled but recent rows are empty" in out
+    assert "Screen Recording" in out

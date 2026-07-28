@@ -32,3 +32,21 @@
 #   dirs:
 #     - ~/my-agent-skills
 #   disabled: []
+
+# observation:
+#   enabled: false
+#   sample_seconds: 15
+#   capture_window_titles: true
+#   idle_threshold_seconds: 180
+#   retention_days: 14
+#   max_rows: 20000
+#   redact_patterns:
+#     - '(?i)private-project'
+
+# reflection:
+#   enabled: true
+#   interval_minutes: 20
+#   min_gap_minutes: 60
+#   quiet_after_nudge_minutes: 10
+#   context_hours: 3
+#   max_tool_rounds: 4

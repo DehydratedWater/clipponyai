@@ -44,6 +44,7 @@ from .accountability import (
     Goal,
     Routine,
 )
+from .digest import summarize_categories
 from .routines import VALID_CADENCES, validate_time_of_day
 from .rules import validate_add_rule, validate_update_rule
 from .tasks import Task
@@ -104,10 +105,27 @@ _DASHBOARD_STYLE = """
 
 # ── helpers ─────────────────────────────────────────────────────────────
 
+
 def _fmt_dt(dt: datetime | None) -> str:
     if dt is None:
         return ""
     return dt.strftime("%Y-%m-%d %H:%M")
+
+
+def _fmt_duration(seconds: float) -> str:
+    seconds = max(0, int(seconds))
+    hours, remainder = divmod(seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours:
+        return f"{hours}h {minutes:02d}m"
+    if minutes:
+        return f"{minutes}m {secs:02d}s"
+    return f"{secs}s"
+
+
+def _fmt_minutes(minutes: int) -> str:
+    hours, remainder = divmod(minutes, 60)
+    return f"{hours}h{remainder:02d}m" if hours else f"{remainder}m"
 
 
 def _fmt_date(dt: datetime | None) -> str:
@@ -131,10 +149,14 @@ def _cadence_label(r: Routine) -> str:
 
 
 def _status_icon(status: str) -> str:
-    return {"active": "🟢", "achieved": "✅", "cancelled": "⚪",
-            "pending": "🔵", "done": "✅", "dropped": "⚰️"}.get(
-        status, status
-    )
+    return {
+        "active": "🟢",
+        "achieved": "✅",
+        "cancelled": "⚪",
+        "pending": "🔵",
+        "done": "✅",
+        "dropped": "⚰️",
+    }.get(status, status)
 
 
 def _empty_label(text: str = "") -> QLabel:
@@ -152,6 +174,7 @@ def _toolbar_spacer() -> QWidget:
 
 
 # ── Tasks tab ──────────────────────────────────────────────────────────
+
 
 class TasksTab(QWidget):
     """Task list with add/complete/snooze/edit actions."""
@@ -212,8 +235,13 @@ class TasksTab(QWidget):
         self.btn_restore.setToolTip("Restore dropped/cancelled task")
         self.btn_restore.setProperty("secondary", True)
         self.btn_restore.clicked.connect(self._restore_selected)
-        for btn in (self.btn_complete, self.btn_snooze, self.btn_edit,
-                     self.btn_cancel, self.btn_restore):
+        for btn in (
+            self.btn_complete,
+            self.btn_snooze,
+            self.btn_edit,
+            self.btn_cancel,
+            self.btn_restore,
+        ):
             action_lay.addWidget(btn)
         action_lay.addStretch()
         lay.addLayout(action_lay)
@@ -256,42 +284,65 @@ class TasksTab(QWidget):
             if not tasks:
                 continue
             parent = QTreeWidgetItem(self.tree, [label, "", "", "", ""])
-            parent.setFont(0, Qt.systemFont().font() if hasattr(Qt, 'systemFont') else parent.font(0))
+            parent.setFont(
+                0, Qt.systemFont().font() if hasattr(Qt, "systemFont") else parent.font(0)
+            )
             for t in tasks:
-                child = QTreeWidgetItem(parent, [
-                    f"#{t.id}",
-                    t.title,
-                    _status_icon(t.status),
-                    _fmt_dt(t.deadline),
-                    t.notes or "",
-                ])
+                child = QTreeWidgetItem(
+                    parent,
+                    [
+                        f"#{t.id}",
+                        t.title,
+                        _status_icon(t.status),
+                        _fmt_dt(t.deadline),
+                        t.notes or "",
+                    ],
+                )
                 child.setData(0, Qt.UserRole, t)
 
         if completed:
             parent = QTreeWidgetItem(self.tree, ["✅ Completed", "", "", "", ""])
             for t in completed:
-                child = QTreeWidgetItem(parent, [
-                    f"#{t.id}", t.title, _status_icon(t.status),
-                    _fmt_dt(t.completed_at), t.notes or "",
-                ])
+                child = QTreeWidgetItem(
+                    parent,
+                    [
+                        f"#{t.id}",
+                        t.title,
+                        _status_icon(t.status),
+                        _fmt_dt(t.completed_at),
+                        t.notes or "",
+                    ],
+                )
                 child.setData(0, Qt.UserRole, t)
 
         if dropped:
             parent = QTreeWidgetItem(self.tree, ["⚰️ Dropped", "", "", "", ""])
             for t in dropped:
-                child = QTreeWidgetItem(parent, [
-                    f"#{t.id}", t.title, _status_icon(t.status),
-                    _fmt_dt(t.deadline), t.notes or "",
-                ])
+                child = QTreeWidgetItem(
+                    parent,
+                    [
+                        f"#{t.id}",
+                        t.title,
+                        _status_icon(t.status),
+                        _fmt_dt(t.deadline),
+                        t.notes or "",
+                    ],
+                )
                 child.setData(0, Qt.UserRole, t)
 
         if cancelled:
             parent = QTreeWidgetItem(self.tree, ["⚪ Cancelled", "", "", "", ""])
             for t in cancelled:
-                child = QTreeWidgetItem(parent, [
-                    f"#{t.id}", t.title, _status_icon(t.status),
-                    _fmt_dt(t.deadline), t.notes or "",
-                ])
+                child = QTreeWidgetItem(
+                    parent,
+                    [
+                        f"#{t.id}",
+                        t.title,
+                        _status_icon(t.status),
+                        _fmt_dt(t.deadline),
+                        t.notes or "",
+                    ],
+                )
                 child.setData(0, Qt.UserRole, t)
 
         # Expand all section headers
@@ -378,7 +429,9 @@ class TasksTab(QWidget):
     def _restore_selected(self):
         task = self._get_selected_task()
         if task is None:
-            QMessageBox.information(self, "Select Task", "Select a dropped or cancelled task to restore.")
+            QMessageBox.information(
+                self, "Select Task", "Select a dropped or cancelled task to restore."
+            )
             return
         if task.status not in ("dropped", "cancelled"):
             return
@@ -408,9 +461,9 @@ class AddTaskDialog(QDialog):
         form.addRow("Notes:", self.notes_field)
 
         self.deadline_check = QCheckBox("Set deadline")
-        self.datetime_edit = __import__("PySide6.QtWidgets", fromlist=["QDateTimeEdit"]).QDateTimeEdit(
-            datetime.now() + timedelta(hours=1)
-        )
+        self.datetime_edit = __import__(
+            "PySide6.QtWidgets", fromlist=["QDateTimeEdit"]
+        ).QDateTimeEdit(datetime.now() + timedelta(hours=1))
         self.datetime_edit.setCalendarPopup(True)
         self.datetime_edit.setEnabled(False)
         self.deadline_check.toggled.connect(self.datetime_edit.setEnabled)
@@ -435,9 +488,9 @@ class SnoozeDialog(QDialog):
         lay = QVBoxLayout(self)
         form = QFormLayout()
 
-        self.datetime_edit = __import__("PySide6.QtWidgets", fromlist=["QDateTimeEdit"]).QDateTimeEdit(
-            datetime.now() + timedelta(hours=2)
-        )
+        self.datetime_edit = __import__(
+            "PySide6.QtWidgets", fromlist=["QDateTimeEdit"]
+        ).QDateTimeEdit(datetime.now() + timedelta(hours=2))
         self.datetime_edit.setCalendarPopup(True)
         form.addRow("Remind me at:", self.datetime_edit)
 
@@ -461,7 +514,9 @@ class EditDeadlineDialog(QDialog):
         QLabel(f"Task: {task.title}").setParent(self)
         lay.addWidget(lay.widget(0) if lay.count() > 0 else QLabel())
 
-        self.datetime_edit = __import__("PySide6.QtWidgets", fromlist=["QDateTimeEdit"]).QDateTimeEdit()
+        self.datetime_edit = __import__(
+            "PySide6.QtWidgets", fromlist=["QDateTimeEdit"]
+        ).QDateTimeEdit()
         self.datetime_edit.setCalendarPopup(True)
         if task.deadline:
             self.datetime_edit.setDateTime(task.deadline)
@@ -485,6 +540,7 @@ class EditDeadlineDialog(QDialog):
 
 
 # ── Routines tab ───────────────────────────────────────────────────────
+
 
 class RoutinesTab(QWidget):
     """Routine table with add/edit/complete/skip/toggle/archive."""
@@ -518,9 +574,18 @@ class RoutinesTab(QWidget):
 
         self.table = QTableWidget()
         self.table.setColumnCount(8)
-        self.table.setHorizontalHeaderLabels([
-            "ID", "Title", "Cadence", "Time", "Deadline", "Enabled", "Streak", "Actions",
-        ])
+        self.table.setHorizontalHeaderLabels(
+            [
+                "ID",
+                "Title",
+                "Cadence",
+                "Time",
+                "Deadline",
+                "Enabled",
+                "Streak",
+                "Actions",
+            ]
+        )
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         self.table.horizontalHeader().resizeSection(1, 180)
         self.table.horizontalHeader().resizeSection(2, 120)
@@ -546,6 +611,7 @@ class RoutinesTab(QWidget):
             completions = self.completion_store.by_routine(r.id)
             from .routines import current_streak as calc_current
             from .routines import longest_streak as calc_longest
+
             cur_streak = calc_current(r, completions)
             long_streak = calc_longest(r, completions)
 
@@ -711,6 +777,7 @@ class AddRoutineDialog(QDialog):
 
         # Time of day
         from PySide6.QtCore import QTime
+
         self.time_edit = QTimeEdit()
         if existing and existing.time_of_day:
             h, m = existing.time_of_day.split(":")
@@ -764,7 +831,9 @@ class AddRoutineDialog(QDialog):
         cadence = self.cadence_combo.currentData()
         weekdays = [i for i, chk in enumerate(self.weekday_checks) if chk.isChecked()]
         time_of_day = self.time_edit.time().toString("HH:mm")
-        deadline_time = self.deadline_edit.time().toString("HH:mm") if self.deadline_check.isChecked() else None
+        deadline_time = (
+            self.deadline_edit.time().toString("HH:mm") if self.deadline_check.isChecked() else None
+        )
         day_of_month = self.dom_spin.value() if cadence == "monthly" else None
 
         if cadence == "weekdays":
@@ -787,6 +856,7 @@ class AddRoutineDialog(QDialog):
 
 
 # ── Goals tab ──────────────────────────────────────────────────────────
+
 
 class GoalsTab(QWidget):
     """Goal list with add/edit/check-in/achieve/reopen."""
@@ -820,9 +890,18 @@ class GoalsTab(QWidget):
 
         self.table = QTableWidget()
         self.table.setColumnCount(8)
-        self.table.setHorizontalHeaderLabels([
-            "ID", "Title", "Status", "Met", "Target Count", "Target Streak", "Current Streak", "Actions",
-        ])
+        self.table.setHorizontalHeaderLabels(
+            [
+                "ID",
+                "Title",
+                "Status",
+                "Met",
+                "Target Count",
+                "Target Streak",
+                "Current Streak",
+                "Actions",
+            ]
+        )
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         self.table.horizontalHeader().resizeSection(1, 200)
         self.table.horizontalHeader().resizeSection(7, 200)
@@ -835,7 +914,9 @@ class GoalsTab(QWidget):
         lay.addWidget(self._empty)
 
         # Info label
-        info = QLabel("Linked routines: comma-separated routine IDs (validated against existing routines).")
+        info = QLabel(
+            "Linked routines: comma-separated routine IDs (validated against existing routines)."
+        )
         info.setStyleSheet("color: #8d86a8; font-size: 11px;")
         lay.addWidget(info)
 
@@ -852,8 +933,12 @@ class GoalsTab(QWidget):
             self.table.setItem(row, 1, QTableWidgetItem(s.title))
             self.table.setItem(row, 2, QTableWidgetItem(f"{_status_icon(s.status)} {s.status}"))
             self.table.setItem(row, 3, QTableWidgetItem(str(s.count)))
-            self.table.setItem(row, 4, QTableWidgetItem(str(s.target_count) if s.target_count else "—"))
-            self.table.setItem(row, 5, QTableWidgetItem(str(s.target_streak) if s.target_streak else "—"))
+            self.table.setItem(
+                row, 4, QTableWidgetItem(str(s.target_count) if s.target_count else "—")
+            )
+            self.table.setItem(
+                row, 5, QTableWidgetItem(str(s.target_streak) if s.target_streak else "—")
+            )
             self.table.setItem(row, 6, QTableWidgetItem(f"{s.current_streak}/{s.longest_streak}"))
 
             # Actions
@@ -967,9 +1052,12 @@ class CheckInDialog(QDialog):
 
 
 class AddGoalDialog(QDialog):
-    def __init__(self, existing: Goal | None = None,
-                 available_routines: list[Routine] | None = None,
-                 parent=None):
+    def __init__(
+        self,
+        existing: Goal | None = None,
+        available_routines: list[Routine] | None = None,
+        parent=None,
+    ):
         super().__init__(parent, Qt.Dialog)
         self.setWindowTitle("Edit Goal" if existing else "Add Goal")
         self.setMinimumWidth(420)
@@ -1073,6 +1161,7 @@ class AddGoalDialog(QDialog):
 
 # ── Rules tab ──────────────────────────────────────────────────────────
 
+
 class RulesTab(QWidget):
     """Accountability rules: add/edit/toggle/delete."""
 
@@ -1092,8 +1181,10 @@ class RulesTab(QWidget):
             "Time rules fire deterministically. Custom rules are reserved for future LLM evaluation."
         )
         info.setWordWrap(True)
-        info.setStyleSheet("color: #8d86a8; font-size: 11px; padding: 4px; "
-                           "background: #2a2a1a; border: 1px solid #5a5a33; border-radius: 4px;")
+        info.setStyleSheet(
+            "color: #8d86a8; font-size: 11px; padding: 4px; "
+            "background: #2a2a1a; border: 1px solid #5a5a33; border-radius: 4px;"
+        )
         lay.addWidget(info)
 
         toolbar = QToolBar()
@@ -1113,9 +1204,17 @@ class RulesTab(QWidget):
 
         self.table = QTableWidget()
         self.table.setColumnCount(7)
-        self.table.setHorizontalHeaderLabels([
-            "ID", "Title", "Type", "Condition", "Message", "Enabled", "Actions",
-        ])
+        self.table.setHorizontalHeaderLabels(
+            [
+                "ID",
+                "Title",
+                "Type",
+                "Condition",
+                "Message",
+                "Enabled",
+                "Actions",
+            ]
+        )
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         self.table.horizontalHeader().resizeSection(1, 160)
         self.table.horizontalHeader().resizeSection(3, 160)
@@ -1176,7 +1275,9 @@ class RulesTab(QWidget):
 
     def _delete_rule(self, rule_id: int):
         reply = QMessageBox.question(
-            self, "Delete Rule", "Are you sure you want to delete this rule?",
+            self,
+            "Delete Rule",
+            "Are you sure you want to delete this rule?",
             QMessageBox.Yes | QMessageBox.No,
         )
         if reply == QMessageBox.Yes:
@@ -1234,9 +1335,11 @@ class AddRuleDialog(QDialog):
 
         self.condition_field = QLineEdit(existing.condition if existing else "")
         self.condition_field.setPlaceholderText("e.g. after 10 PM")
-        self._condition_hint = QLabel('Time: "after HH:MM", "before HH:MM", "between X and Y"\n'
-                                       'Screen: free-text (requires awareness opt-in)\n'
-                                       'Custom: free-text (reserved for LLM)')
+        self._condition_hint = QLabel(
+            'Time: "after HH:MM", "before HH:MM", "between X and Y"\n'
+            "Screen: free-text (requires awareness opt-in)\n"
+            "Custom: free-text (reserved for LLM)"
+        )
         self._condition_hint.setWordWrap(True)
         self._condition_hint.setStyleSheet("color: #8d86a8; font-size: 11px;")
         form.addRow("Condition *:", self.condition_field)
@@ -1265,7 +1368,9 @@ class AddRuleDialog(QDialog):
     def _on_type_change(self, index: int):
         rule_type = self.type_combo.currentData()
         if rule_type == "time":
-            self.condition_field.setPlaceholderText('e.g. "after 10 PM" or "between 9:00 and 17:00"')
+            self.condition_field.setPlaceholderText(
+                'e.g. "after 10 PM" or "between 9:00 and 17:00"'
+            )
         elif rule_type == "screen":
             self.condition_field.setPlaceholderText("e.g. 'social media detected'")
         else:
@@ -1290,6 +1395,7 @@ class AddRuleDialog(QDialog):
 
 
 # ── Activity tab ───────────────────────────────────────────────────────
+
 
 class ActivityTab(QWidget):
     """Read-only activity log (last 200 entries)."""
@@ -1319,9 +1425,16 @@ class ActivityTab(QWidget):
 
         self.table = QTableWidget()
         self.table.setColumnCount(6)
-        self.table.setHorizontalHeaderLabels([
-            "ID", "Timestamp", "Actor", "Action", "Detail", "Ref",
-        ])
+        self.table.setHorizontalHeaderLabels(
+            [
+                "ID",
+                "Timestamp",
+                "Actor",
+                "Action",
+                "Detail",
+                "Ref",
+            ]
+        )
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         self.table.horizontalHeader().resizeSection(1, 140)
         self.table.horizontalHeader().resizeSection(3, 140)
@@ -1352,7 +1465,90 @@ class ActivityTab(QWidget):
             self.table.setItem(row, 5, QTableWidgetItem(ref))
 
 
+# ── Observations tab ───────────────────────────────────────────────────
+
+
+class ObservationsTab(QWidget):
+    """Read-only structured screen observations (last 300 rows)."""
+
+    def __init__(self, core, parent=None):
+        super().__init__(parent)
+        self.observation_store = core.accountability["observations"]
+        self._build()
+
+    def _build(self):
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(8, 8, 8, 8)
+
+        toolbar = QToolBar()
+        toolbar.setMovable(False)
+        btn_refresh = QToolButton()
+        btn_refresh.setText("🔄")
+        btn_refresh.setToolTip("Refresh screen observations")
+        btn_refresh.clicked.connect(self.refresh)
+        toolbar.addWidget(btn_refresh)
+        toolbar.addWidget(_toolbar_spacer())
+        count_label = QLabel("Last 300 rows")
+        count_label.setStyleSheet("color: #8d86a8; font-size: 11px;")
+        toolbar.addWidget(count_label)
+        lay.addWidget(toolbar)
+
+        self.summary = QLabel("today: no screen activity recorded")
+        self.summary.setStyleSheet("color: #c9b7f5; padding: 2px 4px 6px;")
+        lay.addWidget(self.summary)
+
+        self.table = QTableWidget()
+        self.table.setColumnCount(8)
+        self.table.setHorizontalHeaderLabels(
+            ["Start", "End", "Duration", "Source", "App", "Window", "Category", "Activity"]
+        )
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        self.table.horizontalHeader().resizeSection(0, 135)
+        self.table.horizontalHeader().resizeSection(1, 135)
+        self.table.horizontalHeader().resizeSection(4, 150)
+        self.table.horizontalHeader().resizeSection(5, 240)
+        self.table.horizontalHeader().resizeSection(7, 240)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table.setAlternatingRowColors(True)
+        lay.addWidget(self.table)
+
+        self._empty = _empty_label("No screen observations recorded yet.")
+        lay.addWidget(self._empty)
+
+    def refresh(self):
+        entries = self.observation_store.recent(limit=300)
+        self.table.setRowCount(0)
+        self._empty.setVisible(len(entries) == 0)
+        self.table.setVisible(len(entries) > 0)
+
+        today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        totals = summarize_categories(self.observation_store.since(today, limit=5000))
+        if totals:
+            parts = [f"{category} {_fmt_minutes(minutes)}" for category, minutes in totals.items()]
+            self.summary.setText("today: " + " · ".join(parts))
+        else:
+            self.summary.setText("today: no screen activity recorded")
+
+        for entry in entries:
+            row = self.table.rowCount()
+            self.table.insertRow(row)
+            values = [
+                _fmt_dt(entry.started_at),
+                _fmt_dt(entry.ended_at),
+                _fmt_duration((entry.ended_at - entry.started_at).total_seconds()),
+                entry.source,
+                entry.app,
+                entry.window_title,
+                entry.category,
+                entry.activity,
+            ]
+            for column, value in enumerate(values):
+                self.table.setItem(row, column, QTableWidgetItem(value))
+
+
 # ── Token Usage tab ────────────────────────────────────────────────────
+
 
 class TokenUsageTab(QWidget):
     """Token usage summaries and recent calls."""
@@ -1384,7 +1580,9 @@ class TokenUsageTab(QWidget):
         # Today
         self.today_table = QTableWidget()
         self.today_table.setColumnCount(5)
-        self.today_table.setHorizontalHeaderLabels(["Lane", "Prompt", "Completion", "Total", "Calls"])
+        self.today_table.setHorizontalHeaderLabels(
+            ["Lane", "Prompt", "Completion", "Total", "Calls"]
+        )
         self.today_table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         today_header = QLabel("Today")
         today_header.setAlignment(Qt.AlignCenter)
@@ -1399,7 +1597,9 @@ class TokenUsageTab(QWidget):
         # 7 days
         self.week_table = QTableWidget()
         self.week_table.setColumnCount(5)
-        self.week_table.setHorizontalHeaderLabels(["Lane", "Prompt", "Completion", "Total", "Calls"])
+        self.week_table.setHorizontalHeaderLabels(
+            ["Lane", "Prompt", "Completion", "Total", "Calls"]
+        )
         self.week_table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         week_header = QLabel("Last 7 Days")
         week_header.setAlignment(Qt.AlignCenter)
@@ -1436,9 +1636,18 @@ class TokenUsageTab(QWidget):
 
         self.recent_table = QTableWidget()
         self.recent_table.setColumnCount(8)
-        self.recent_table.setHorizontalHeaderLabels([
-            "Timestamp", "Lane", "Purpose", "Provider", "Model", "Prompt", "Completion", "Exact?",
-        ])
+        self.recent_table.setHorizontalHeaderLabels(
+            [
+                "Timestamp",
+                "Lane",
+                "Purpose",
+                "Provider",
+                "Model",
+                "Prompt",
+                "Completion",
+                "Exact?",
+            ]
+        )
         self.recent_table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         self.recent_table.horizontalHeader().resizeSection(0, 140)
         self.recent_table.horizontalHeader().resizeSection(3, 100)
@@ -1490,6 +1699,7 @@ class TokenUsageTab(QWidget):
 
 
 # ── Main Dashboard Window ──────────────────────────────────────────────
+
 
 class DashboardWindow(QDialog):
     """Main dashboard window with tabbed interface.
@@ -1545,6 +1755,9 @@ class DashboardWindow(QDialog):
         self._activity_tab = ActivityTab(core)
         self.tabs.addTab(self._activity_tab, "📜 Activity")
 
+        self._observations_tab = ObservationsTab(core)
+        self.tabs.addTab(self._observations_tab, "👀 Observations")
+
         self._token_tab = TokenUsageTab(core)
         self.tabs.addTab(self._token_tab, "📊 Token Usage")
 
@@ -1553,6 +1766,7 @@ class DashboardWindow(QDialog):
 
         # Keyboard shortcut: Ctrl+R to refresh
         from PySide6.QtGui import QShortcut
+
         shortcut = QShortcut(QKeySequence("Ctrl+R"), self)
         shortcut.activated.connect(self.refresh_all)
 

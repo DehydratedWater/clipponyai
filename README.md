@@ -65,8 +65,8 @@ pony/tray menu:
   22:00.” Time rules are deterministic. Screen-based rules only run when the
   separate, opt-in screen-awareness privacy gates are enabled.
 
-The dashboard has six live tabs: **Tasks, Routines, Goals, Rules, Activity, and
-Token Usage**. Forms and conversation tools write to the same SQLite records,
+The dashboard has seven live tabs: **Tasks, Routines, Goals, Rules, Activity,
+Observations, and Token Usage**. Forms and conversation tools write to the same SQLite records,
 so changes made in one surface immediately appear in the other.
 
 On a fresh profile, the pony asks one compact onboarding batch about work
@@ -77,9 +77,10 @@ there is a pending agenda, a due routine/goal check-in, quiet/off-hours, another
 notification in that scheduler pass, or an explicit “don't bother me” period.
 These controls are editable in **Settings → Proactive**.
 
-For transparency, **Activity** retains the last 200 pony actions. Every actual
-screen assessment records a safe verdict, reason, and confidence—even when no
-intervention occurs—but never stores the screenshot itself. **Token Usage**
+For transparency, **Activity** retains the last 200 pony actions, including
+awareness interventions and sensor failures. Structured screen samples live in
+the separate, independently retained **Observations** tab; neither surface stores
+screenshots. **Token Usage**
 shows chat/sensor/slow/vision consumption for today, seven days, and all time;
 entries are marked *estimated* when a provider does not return exact usage.
 
@@ -323,6 +324,50 @@ awareness cannot function.
 and the resolved vision model. Use `clipponyai check-llm --vision` to verify the
 complete local image path.
 
+### What she notices
+
+Screen observation is a separate, opt-in local timeline. It records the foreground
+application, an optionally redacted window title, category, idle time, and the vision
+model's short activity phrase. It never stores screenshots. Rows default to 14 days of
+retention with a 20,000-row safety cap and appear in the dashboard's **Observations** tab.
+The `recent_screen_activity` chat tool lets the pony answer questions such as “what was I
+doing this afternoon?” from that same structured record.
+
+```yaml
+observation:
+  enabled: true
+  sample_seconds: 15
+  capture_window_titles: true
+  idle_threshold_seconds: 180
+  retention_days: 14
+  max_rows: 20000
+  redact_patterns:
+    - '(?i)private-project'
+```
+
+On macOS, application names and idle time need no permission. Window titles and awareness
+screenshots need **Screen Recording**; cursor chasing needs **Accessibility**. Turn the
+feature off with `observation.enabled: false`, or configure one regex per line under
+`redact_patterns` to remove sensitive title fragments before storage. See
+[Screen observation and reflection](docs/observation.md) for the schema and analysis SQL.
+
+### Reflection
+
+Reflection lets the pony review recent grounded context roughly every 20 minutes and use
+her normal tools when an insight needs more information. She stays silent by default,
+speaks at most once an hour with the default settings, honors quiet hours, and respects the
+existing “don't bother me” mute. Observation can remain off; reflection then falls back to
+tasks, routines, goals, recent activity, messages, and available tools.
+
+```yaml
+reflection:
+  enabled: true
+  interval_minutes: 20
+  min_gap_minutes: 60
+  quiet_after_nudge_minutes: 10
+  context_hours: 3
+```
+
 ### Privacy-gated log watching
 
 Logwatch lets the pony tail local log files and answer questions about them
@@ -353,7 +398,8 @@ section in a tabbed UI:
 - **Reminders** — enabled, check interval, quiet hours, nudge gaps, max nudges, batch limit
 - **Work Hours** — enable/disable, start/end times, active weekdays, closing nudge, off-hours suppression
 - **Log Watch** — enable/disable, file paths, line/char limits
-- **Awareness** — enable/disable, interval, cooldown, confidence threshold, focus policy
+- **Awareness** — focus checks plus screen-observation consent, sampling, retention, title capture, and redaction
+- **Proactive** — context-gap questions, onboarding, and periodic reflection controls
 - **LLM** — switch active provider
 - **Misc** — autostart on login
 

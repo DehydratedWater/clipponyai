@@ -10,7 +10,7 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytest
 from PySide6.QtWidgets import QApplication
@@ -73,12 +73,50 @@ def test_dashboard_constructs_with_all_tabs(core):
 
     dash = DashboardWindow(core)
     assert dash.windowTitle() == "clipponyai — Planner & Activity"
-    assert dash.tabs.count() == 6
+    assert dash.tabs.count() == 7
 
-    expected = ["Tasks", "Routines", "Goals", "Rules", "Activity", "Token Usage"]
+    expected = ["Tasks", "Routines", "Goals", "Rules", "Activity", "Observations", "Token Usage"]
     for i, name in enumerate(expected):
         assert name in dash.tabs.tabText(i), f"Tab {i}: {dash.tabs.tabText(i)}"
 
+    dash.close()
+    app.processEvents()
+
+
+def test_observations_tab_populates_table_and_today_summary(core):
+    app = QApplication.instance() or QApplication([])
+    from clipponyai.dashboard import DashboardWindow
+
+    now = datetime.now()
+    core.accountability["observations"].record(
+        started_at=now - timedelta(minutes=45),
+        ended_at=now,
+        source="os",
+        app="Code",
+        window_title="test_dashboard_gui.py",
+        category="work",
+        confidence=1.0,
+    )
+    core.accountability["observations"].record(
+        started_at=now - timedelta(minutes=20),
+        ended_at=now - timedelta(minutes=20),
+        source="vision",
+        app="Code",
+        category="work",
+        activity="testing the observations dashboard",
+        confidence=0.9,
+    )
+
+    dash = DashboardWindow(core)
+    observations_tab = dash._observations_tab
+    observations_tab.refresh()
+    app.processEvents()
+
+    assert observations_tab.table.rowCount() == 2
+    assert observations_tab.table.item(0, 4).text() == "Code"
+    assert observations_tab.table.item(1, 7).text() == "testing the observations dashboard"
+    assert observations_tab.summary.text().startswith("today:")
+    assert "work 45m" in observations_tab.summary.text()
     dash.close()
     app.processEvents()
 

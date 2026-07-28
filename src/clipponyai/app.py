@@ -369,6 +369,9 @@ def _open_settings(pony, core: Core, config: Config, chat=None) -> None:
         # Update proactive questioner's config reference in-place
         if core.proactive_questioner is not None:
             core.proactive_questioner.config = config.proactive_questions
+        observation_store = core.accountability["observations"]
+        observation_store.max_rows = config.observation.max_rows
+        observation_store.retention_days = config.observation.retention_days
         try:
             asyncio.get_running_loop().create_task(core.awareness_monitor.refresh())
         except RuntimeError:

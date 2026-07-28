@@ -58,6 +58,18 @@ class TestReadForm:
         assert form.awareness_cooldown_minutes == 30
         assert form.awareness_minimum_confidence == 0.7
         assert "social media" in form.awareness_focus_policy
+        assert form.observation_enabled is False
+        assert form.observation_sample_seconds == 15
+        assert form.observation_capture_window_titles is True
+        assert form.observation_idle_threshold_seconds == 180
+        assert form.observation_retention_days == 14
+        assert form.observation_max_rows == 20000
+        assert form.observation_redact_patterns == []
+        assert form.reflection_enabled is True
+        assert form.reflection_interval_minutes == 20
+        assert form.reflection_min_gap_minutes == 60
+        assert form.reflection_quiet_after_nudge_minutes == 10
+        assert form.reflection_context_hours == 3
 
     def test_custom_values_roundtrip(self):
         config = Config()
@@ -90,6 +102,18 @@ class TestReadForm:
         config.awareness.cooldown_minutes = 60
         config.awareness.minimum_confidence = 0.5
         config.awareness.focus_policy = "custom policy"
+        config.observation.enabled = True
+        config.observation.sample_seconds = 25
+        config.observation.capture_window_titles = False
+        config.observation.idle_threshold_seconds = 240
+        config.observation.retention_days = 30
+        config.observation.max_rows = 30000
+        config.observation.redact_patterns = ["secret", r"issue-\d+"]
+        config.reflection.enabled = False
+        config.reflection.interval_minutes = 45
+        config.reflection.min_gap_minutes = 90
+        config.reflection.quiet_after_nudge_minutes = 20
+        config.reflection.context_hours = 8
 
         form = read_form(config)
         assert form.screenshot_enabled is True
@@ -121,6 +145,18 @@ class TestReadForm:
         assert form.awareness_cooldown_minutes == 60
         assert form.awareness_minimum_confidence == 0.5
         assert form.awareness_focus_policy == "custom policy"
+        assert form.observation_enabled is True
+        assert form.observation_sample_seconds == 25
+        assert form.observation_capture_window_titles is False
+        assert form.observation_idle_threshold_seconds == 240
+        assert form.observation_retention_days == 30
+        assert form.observation_max_rows == 30000
+        assert form.observation_redact_patterns == ["secret", r"issue-\d+"]
+        assert form.reflection_enabled is False
+        assert form.reflection_interval_minutes == 45
+        assert form.reflection_min_gap_minutes == 90
+        assert form.reflection_quiet_after_nudge_minutes == 20
+        assert form.reflection_context_hours == 8
 
     def test_autostart_flag_passed_through(self):
         config = Config()
@@ -188,6 +224,18 @@ class TestApplyToConfig:
         config.awareness.cooldown_minutes = 45
         config.awareness.minimum_confidence = 0.8
         config.awareness.focus_policy = "awareness policy"
+        config.observation.enabled = True
+        config.observation.sample_seconds = 20
+        config.observation.capture_window_titles = False
+        config.observation.idle_threshold_seconds = 300
+        config.observation.retention_days = 21
+        config.observation.max_rows = 25000
+        config.observation.redact_patterns = ["token=.*"]
+        config.reflection.enabled = False
+        config.reflection.interval_minutes = 30
+        config.reflection.min_gap_minutes = 120
+        config.reflection.quiet_after_nudge_minutes = 15
+        config.reflection.context_hours = 6
 
         form = read_form(config)
         apply_to_config(form, config)
@@ -221,6 +269,18 @@ class TestApplyToConfig:
         assert config.awareness.cooldown_minutes == 45
         assert config.awareness.minimum_confidence == 0.8
         assert config.awareness.focus_policy == "awareness policy"
+        assert config.observation.enabled is True
+        assert config.observation.sample_seconds == 20
+        assert config.observation.capture_window_titles is False
+        assert config.observation.idle_threshold_seconds == 300
+        assert config.observation.retention_days == 21
+        assert config.observation.max_rows == 25000
+        assert config.observation.redact_patterns == ["token=.*"]
+        assert config.reflection.enabled is False
+        assert config.reflection.interval_minutes == 30
+        assert config.reflection.min_gap_minutes == 120
+        assert config.reflection.quiet_after_nudge_minutes == 15
+        assert config.reflection.context_hours == 6
 
     def test_work_hours_weekdays_deduped(self):
         config = Config()
@@ -253,6 +313,30 @@ class TestValidate:
         form = SettingsForm()
         errors = validate(form, available_providers=self._providers())
         assert errors == []
+
+    @pytest.mark.parametrize(
+        ("field_name", "value", "expected"),
+        [
+            ("observation_sample_seconds", 4, "sample interval"),
+            ("observation_idle_threshold_seconds", 29, "idle threshold"),
+            ("observation_retention_days", 366, "retention"),
+            ("observation_max_rows", 499, "max rows"),
+            ("reflection_interval_minutes", 4, "reflection interval"),
+            ("reflection_min_gap_minutes", 14, "minimum gap"),
+            ("reflection_quiet_after_nudge_minutes", 121, "quiet after nudge"),
+            ("reflection_context_hours", 25, "reflection context"),
+        ],
+    )
+    def test_observation_and_reflection_bounds(self, field_name, value, expected):
+        form = SettingsForm()
+        setattr(form, field_name, value)
+        errors = validate(form, available_providers=self._providers())
+        assert any(expected in error.lower() for error in errors)
+
+    def test_invalid_observation_redact_pattern(self):
+        form = SettingsForm(observation_redact_patterns=["valid", "[broken"])
+        errors = validate(form, available_providers=self._providers())
+        assert any("[broken" in error and "redact pattern" in error.lower() for error in errors)
 
     def test_scale_too_small(self):
         form = SettingsForm(pony_scale=0.1)

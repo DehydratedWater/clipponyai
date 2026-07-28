@@ -122,6 +122,7 @@ def _build_privacy_tab(form: SettingsForm) -> QWidget:
     fl.addRow(chk_auto)
     box.setLayout(fl)
     lay.addWidget(box)
+
     lay.addStretch()
 
     def apply() -> None:
@@ -391,7 +392,11 @@ def _build_logwatch_tab(form: SettingsForm) -> QWidget:
     add_path_row.addStretch()
 
     remove_btn = QPushButton_("- remove")
-    remove_btn.clicked.connect(lambda: paths_list.takeItem(paths_list.currentRow()) if paths_list.currentRow() >= 0 else None)
+    remove_btn.clicked.connect(
+        lambda: (
+            paths_list.takeItem(paths_list.currentRow()) if paths_list.currentRow() >= 0 else None
+        )
+    )
 
     lines_spin = QSpinBox()
     lines_spin.setRange(1, 10000)
@@ -419,6 +424,7 @@ def _build_logwatch_tab(form: SettingsForm) -> QWidget:
     def apply() -> None:
         form.logwatch_enabled = chk_enabled.isChecked()
         from pathlib import Path as _Path
+
         raw_paths = [paths_list.item(i).text() for i in range(paths_list.count())]
         form.logwatch_paths = [str(_Path(p).expanduser()) for p in raw_paths]
         form.logwatch_max_lines = lines_spin.value()
@@ -578,6 +584,68 @@ def _build_awareness_tab(form: SettingsForm) -> QWidget:
     fl.addRow("Focus policy:", policy_edit)
     box.setLayout(fl)
     lay.addWidget(box)
+
+    observation_box = QGroupBox("Screen Observation")
+    observation_fl = QFormLayout()
+
+    observation_info = QLabel(
+        "Stores application names, window titles, and idle time — never screenshots. "
+        "Window-title capture may require Screen Recording permission on macOS."
+    )
+    observation_info.setWordWrap(True)
+    observation_info.setStyleSheet("color: #8d86a8; font-size: 11px;")
+
+    chk_observation = QCheckBox("Enable continuous screen observation")
+    chk_observation.setChecked(form.observation_enabled)
+
+    sample_spin = QSpinBox()
+    sample_spin.setRange(5, 300)
+    sample_spin.setSuffix(" s")
+    sample_spin.setValue(form.observation_sample_seconds)
+
+    chk_titles = QCheckBox("Capture window titles")
+    chk_titles.setChecked(form.observation_capture_window_titles)
+
+    idle_spin = QSpinBox()
+    idle_spin.setRange(30, 3600)
+    idle_spin.setSuffix(" s")
+    idle_spin.setValue(form.observation_idle_threshold_seconds)
+
+    retention_spin = QSpinBox()
+    retention_spin.setRange(1, 365)
+    retention_spin.setSuffix(" days")
+    retention_spin.setValue(form.observation_retention_days)
+
+    max_rows_spin = QSpinBox()
+    max_rows_spin.setRange(500, 100000)
+    max_rows_spin.setValue(form.observation_max_rows)
+
+    redact_edit = QPlainTextEdit()
+    redact_edit.setPlainText("\n".join(form.observation_redact_patterns))
+    redact_edit.setFixedHeight(60)
+    redact_edit.setPlaceholderText("One regular expression per line")
+
+    err_observation_interval = ErrorLabel()
+    err_observation_idle = ErrorLabel()
+    err_observation_retention = ErrorLabel()
+    err_observation_rows = ErrorLabel()
+    err_observation_redact = ErrorLabel()
+
+    observation_fl.addRow("", observation_info)
+    observation_fl.addRow("", chk_observation)
+    observation_fl.addRow("Sample interval:", sample_spin)
+    observation_fl.addRow("", err_observation_interval)
+    observation_fl.addRow("", chk_titles)
+    observation_fl.addRow("Idle threshold:", idle_spin)
+    observation_fl.addRow("", err_observation_idle)
+    observation_fl.addRow("Retention:", retention_spin)
+    observation_fl.addRow("", err_observation_retention)
+    observation_fl.addRow("Maximum rows:", max_rows_spin)
+    observation_fl.addRow("", err_observation_rows)
+    observation_fl.addRow("Redact patterns:", redact_edit)
+    observation_fl.addRow("", err_observation_redact)
+    observation_box.setLayout(observation_fl)
+    lay.addWidget(observation_box)
     lay.addStretch()
 
     def apply() -> None:
@@ -586,11 +654,25 @@ def _build_awareness_tab(form: SettingsForm) -> QWidget:
         form.awareness_cooldown_minutes = cooldown_spin.value()
         form.awareness_minimum_confidence = conf_spin.value() / 100.0
         form.awareness_focus_policy = policy_edit.toPlainText().strip()
+        form.observation_enabled = chk_observation.isChecked()
+        form.observation_sample_seconds = sample_spin.value()
+        form.observation_capture_window_titles = chk_titles.isChecked()
+        form.observation_idle_threshold_seconds = idle_spin.value()
+        form.observation_retention_days = retention_spin.value()
+        form.observation_max_rows = max_rows_spin.value()
+        form.observation_redact_patterns = [
+            line.strip() for line in redact_edit.toPlainText().splitlines() if line.strip()
+        ]
 
     def set_errors(errors: dict[str, str]) -> None:
         err_interval.set_error(errors.get("awareness_interval"))
         err_cooldown.set_error(errors.get("awareness_cooldown"))
         err_confidence.set_error(errors.get("awareness_confidence"))
+        err_observation_interval.set_error(errors.get("observation_interval"))
+        err_observation_idle.set_error(errors.get("observation_idle"))
+        err_observation_retention.set_error(errors.get("observation_retention"))
+        err_observation_rows.set_error(errors.get("observation_rows"))
+        err_observation_redact.set_error(errors.get("observation_redact"))
 
     page._apply = apply  # type: ignore[attr-defined]
     page._set_errors = set_errors  # type: ignore[attr-defined]
@@ -612,8 +694,10 @@ def _build_proactive_tab(form: SettingsForm) -> QWidget:
         "No LLM call is needed — questions are deterministic."
     )
     info.setWordWrap(True)
-    info.setStyleSheet("color: #8d86a8; font-size: 11px; padding: 4px; "
-                       "background: #2a2a1a; border: 1px solid #5a5a33; border-radius: 4px;")
+    info.setStyleSheet(
+        "color: #8d86a8; font-size: 11px; padding: 4px; "
+        "background: #2a2a1a; border: 1px solid #5a5a33; border-radius: 4px;"
+    )
     lay.addWidget(info)
 
     box = QGroupBox("Proactive Questions")
@@ -649,11 +733,62 @@ def _build_proactive_tab(form: SettingsForm) -> QWidget:
     fl.addRow("", err_gap)
     fl.addRow("Max questions per batch:", batch_spin)
     fl.addRow("", err_batch)
-    fl.addRow("Silence duration (after \"don't bother me\"):", silence_spin)
+    fl.addRow('Silence duration (after "don\'t bother me"):', silence_spin)
     fl.addRow("", err_silence)
     fl.addRow("", chk_agenda)
     box.setLayout(fl)
     lay.addWidget(box)
+
+    reflection_box = QGroupBox("Reflection")
+    reflection_fl = QFormLayout()
+
+    reflection_info = QLabel(
+        "The pony periodically reviews recent context and stays silent unless she has "
+        "something useful or entertaining to add."
+    )
+    reflection_info.setWordWrap(True)
+    reflection_info.setStyleSheet("color: #8d86a8; font-size: 11px;")
+
+    chk_reflection = QCheckBox("Enable periodic reflection")
+    chk_reflection.setChecked(form.reflection_enabled)
+
+    reflection_interval = QSpinBox()
+    reflection_interval.setRange(5, 240)
+    reflection_interval.setSuffix(" min")
+    reflection_interval.setValue(form.reflection_interval_minutes)
+
+    reflection_gap = QSpinBox()
+    reflection_gap.setRange(15, 480)
+    reflection_gap.setSuffix(" min")
+    reflection_gap.setValue(form.reflection_min_gap_minutes)
+
+    reflection_quiet = QSpinBox()
+    reflection_quiet.setRange(0, 120)
+    reflection_quiet.setSuffix(" min")
+    reflection_quiet.setValue(form.reflection_quiet_after_nudge_minutes)
+
+    reflection_context = QSpinBox()
+    reflection_context.setRange(1, 24)
+    reflection_context.setSuffix(" h")
+    reflection_context.setValue(form.reflection_context_hours)
+
+    err_reflection_interval = ErrorLabel()
+    err_reflection_gap = ErrorLabel()
+    err_reflection_quiet = ErrorLabel()
+    err_reflection_context = ErrorLabel()
+
+    reflection_fl.addRow("", reflection_info)
+    reflection_fl.addRow("", chk_reflection)
+    reflection_fl.addRow("Think every:", reflection_interval)
+    reflection_fl.addRow("", err_reflection_interval)
+    reflection_fl.addRow("Minimum spoken gap:", reflection_gap)
+    reflection_fl.addRow("", err_reflection_gap)
+    reflection_fl.addRow("Quiet after another nudge:", reflection_quiet)
+    reflection_fl.addRow("", err_reflection_quiet)
+    reflection_fl.addRow("Context window:", reflection_context)
+    reflection_fl.addRow("", err_reflection_context)
+    reflection_box.setLayout(reflection_fl)
+    lay.addWidget(reflection_box)
 
     # Onboarding section
     onboarding_box = QGroupBox("Onboarding")
@@ -683,11 +818,20 @@ def _build_proactive_tab(form: SettingsForm) -> QWidget:
         form.proactive_silence_default_hours = silence_spin.value()
         form.proactive_require_empty_agenda = chk_agenda.isChecked()
         form.onboarding_enabled = chk_onboarding.isChecked()
+        form.reflection_enabled = chk_reflection.isChecked()
+        form.reflection_interval_minutes = reflection_interval.value()
+        form.reflection_min_gap_minutes = reflection_gap.value()
+        form.reflection_quiet_after_nudge_minutes = reflection_quiet.value()
+        form.reflection_context_hours = reflection_context.value()
 
     def set_errors(errors: dict[str, str]) -> None:
         err_gap.set_error(errors.get("proactive_gap"))
         err_batch.set_error(errors.get("proactive_batch"))
         err_silence.set_error(errors.get("proactive_silence"))
+        err_reflection_interval.set_error(errors.get("reflection_interval"))
+        err_reflection_gap.set_error(errors.get("reflection_gap"))
+        err_reflection_quiet.set_error(errors.get("reflection_quiet"))
+        err_reflection_context.set_error(errors.get("reflection_context"))
 
     page._apply = apply  # type: ignore[attr-defined]
     page._set_errors = set_errors  # type: ignore[attr-defined]
@@ -800,6 +944,26 @@ class SettingsDialog(QDialog):
                 mapping["pony_attention_seconds"] = err
             elif "character" in err_lower:
                 mapping["character"] = err
+            elif "screen observation" in err_lower and "sample interval" in err_lower:
+                mapping["observation_interval"] = err
+            elif "screen observation" in err_lower and "idle" in err_lower:
+                mapping["observation_idle"] = err
+            elif "screen observation" in err_lower and "retention" in err_lower:
+                mapping["observation_retention"] = err
+            elif "screen observation" in err_lower and "max rows" in err_lower:
+                mapping["observation_rows"] = err
+            elif "screen observation" in err_lower and "redact pattern" in err_lower:
+                mapping["observation_redact"] = err
+            elif "awareness" in err_lower and "interval" in err_lower:
+                mapping["awareness_interval"] = err
+            elif "reflection" in err_lower and "interval" in err_lower:
+                mapping["reflection_interval"] = err
+            elif "reflection" in err_lower and "minimum gap" in err_lower:
+                mapping["reflection_gap"] = err
+            elif "reflection" in err_lower and "quiet" in err_lower:
+                mapping["reflection_quiet"] = err
+            elif "reflection" in err_lower and "context" in err_lower:
+                mapping["reflection_context"] = err
             elif "interval" in err_lower:
                 mapping["reminders_check_interval"] = err
             elif "quiet" in err_lower:
@@ -810,7 +974,9 @@ class SettingsDialog(QDialog):
                 mapping["reminders_max_nudges"] = err
             elif "batch" in err_lower:
                 mapping["reminders_batch_limit"] = err
-            elif "work" in err_lower and ("hh:mm" in err_lower or "hours" in err_lower or "minutes" in err_lower):
+            elif "work" in err_lower and (
+                "hh:mm" in err_lower or "hours" in err_lower or "minutes" in err_lower
+            ):
                 mapping["work_hours_time"] = err
             elif "weekday" in err_lower:
                 mapping["work_hours_weekdays"] = err
@@ -820,8 +986,6 @@ class SettingsDialog(QDialog):
                 mapping["logwatch_bounds"] = err
             elif "provider" in err_lower:
                 mapping["active_provider"] = err
-            elif "awareness" in err_lower and "interval" in err_lower:
-                mapping["awareness_interval"] = err
             elif "awareness" in err_lower and "cooldown" in err_lower:
                 mapping["awareness_cooldown"] = err
             elif "awareness" in err_lower and "confidence" in err_lower:
@@ -889,7 +1053,5 @@ class SettingsDialog(QDialog):
 
         # Future Apply clicks compare against what was actually persisted, so
         # an unchanged autostart checkbox never repeats the OS operation.
-        self._original = read_form(
-            self.config, autostart_enabled=self.form.autostart_enabled
-        )
+        self._original = read_form(self.config, autostart_enabled=self.form.autostart_enabled)
         self.applied.emit()

@@ -22,6 +22,7 @@ import logging
 import os
 import sys
 
+from datetime import datetime
 from pathlib import Path
 
 from . import __version__
@@ -74,6 +75,28 @@ def _cmd_doctor(_args) -> int:
         mark = "✓" if good else "✗"
         print(f" {mark} {label}" + (f" — {hint}" if hint and not good else ""))
         ok = ok and good
+
+    def age_text(value: datetime | None) -> str:
+        if value is None:
+            return "never"
+        seconds = max(0, int((datetime.now() - value).total_seconds()))
+        if seconds < 120:
+            return f"{seconds}s ago"
+        minutes = seconds // 60
+        if minutes < 120:
+            return f"{minutes}m ago"
+        hours = minutes // 60
+        if hours < 48:
+            return f"{hours}h ago"
+        return f"{hours // 24}d ago"
+
+    def meta_datetime(raw: str | None) -> datetime | None:
+        if not raw:
+            return None
+        try:
+            return datetime.fromisoformat(raw)
+        except ValueError:
+            return None
 
     print(f"clipponyai {__version__}")
     check(f"config: {config_path()}", config_path().exists(), "run `clipponyai init`")
@@ -192,6 +215,67 @@ def _cmd_doctor(_args) -> int:
         print("  awareness: enabled but screenshot gate is off (screenshot_enabled=False)")
     else:
         print("  awareness: off (opt-in via awareness.enabled + screenshot_enabled)")
+
+    from .accountability import get_stores
+    from .tasks import TaskStore
+
+    doctor_store = TaskStore(db_path())
+    try:
+        doctor_stores = get_stores(doctor_store)
+        observation_store = doctor_stores["observations"]
+        observation_count = observation_store.count()
+        oldest_rows = observation_store.since(datetime.min, limit=1)
+        newest = observation_store.latest()
+        oldest = oldest_rows[0] if oldest_rows else None
+        observation = config.observation
+        if observation.enabled:
+            print(
+                "  screen observation: on "
+                f"(sample={observation.sample_seconds}s, rows={observation_count}, "
+                f"window titles={'on' if observation.capture_window_titles else 'off'})"
+            )
+        else:
+            print(
+                "  screen observation: off "
+                f"(opt-in; rows retained={observation_count}, "
+                f"window titles={'configured' if observation.capture_window_titles else 'off'})"
+            )
+        print(
+            "    history: "
+            f"oldest={age_text(oldest.started_at if oldest else None)}, "
+            f"newest={age_text(newest.started_at if newest else None)}, "
+            f"retention={observation.retention_days}d, max_rows={observation.max_rows}"
+        )
+        recent_observations = observation_store.recent(limit=300)
+        if (
+            observation.enabled
+            and observation.capture_window_titles
+            and recent_observations
+            and all(not row.window_title for row in recent_observations)
+        ):
+            print(
+                "    warning: window titles are enabled but recent rows are empty; "
+                "grant macOS Screen Recording permission"
+            )
+
+        reflection = config.reflection
+        last_run = meta_datetime(doctor_store.get_meta("reflection_last_run"))
+        last_spoke = meta_datetime(doctor_store.get_meta("reflection_last_spoke"))
+        if reflection.enabled:
+            print(
+                f"  reflection: on (interval={reflection.interval_minutes}m, "
+                f"last run={age_text(last_run)}, last spoke={age_text(last_spoke)})"
+            )
+            print(
+                "    fresh runs with an old last-spoke time are healthy: reflection is quiet by default"
+            )
+        else:
+            print(
+                "  reflection: off "
+                f"(last run={age_text(last_run)}, last spoke={age_text(last_spoke)})"
+            )
+    finally:
+        doctor_store.close()
 
     # First-run next steps
     if not have_sprites() or not config_path().exists():
@@ -348,9 +432,7 @@ def _cmd_check_mcp(args) -> int:
         if server is None:
             print(f"ERROR: MCP server {args.server!r} is not configured")
             return 1
-        mcp_config = config.mcp.model_copy(
-            update={"servers": {args.server: server}}
-        )
+        mcp_config = config.mcp.model_copy(update={"servers": {args.server: server}})
     else:
         mcp_config = config.mcp
 
@@ -411,22 +493,24 @@ def _check_llm_vision(active, provider_cfg, agent) -> int:
         live_profile=make_live_profile(active, provider_cfg, VISION),
     ).model_copy(update={"output_schema": schema})
     client = OpenAICompatClient.from_spec(spec)
-    message = [{
-        "role": "user",
-        "content": [
-            {
-                "type": "text",
-                "text": (
-                    "Identify the dominant color of each vertical half. Return only "
-                    "the requested left_color and right_color JSON fields."
-                ),
-            },
-            {
-                "type": "image_url",
-                "image_url": {"url": f"data:image/png;base64,{encoded}"},
-            },
-        ],
-    }]
+    message = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": (
+                        "Identify the dominant color of each vertical half. Return only "
+                        "the requested left_color and right_color JSON fields."
+                    ),
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/png;base64,{encoded}"},
+                },
+            ],
+        }
+    ]
 
     try:
         result = run_interactive(spec, message, client=client, max_tool_rounds=0)
@@ -498,7 +582,9 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("tasks", help="print the task overview")
     sub.add_parser("doctor", help="check your setup")
     check_parser = sub.add_parser("check-llm", help="smoke-test the active LLM provider")
-    check_parser.add_argument("--vision", action="store_true", help="test vision (image) capability")
+    check_parser.add_argument(
+        "--vision", action="store_true", help="test vision (image) capability"
+    )
     mcp_parser = sub.add_parser("check-mcp", help="check configured MCP servers and tools")
     mcp_parser.add_argument("--server", metavar="NAME", help="check only one configured server")
 

@@ -8,6 +8,7 @@ the core logic is unit-testable without a display server.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -98,6 +99,15 @@ class SettingsForm:
     awareness_minimum_confidence: float = 0.7
     awareness_focus_policy: str = ""
 
+    # continuous screen observation
+    observation_enabled: bool = False
+    observation_sample_seconds: int = 15
+    observation_capture_window_titles: bool = True
+    observation_idle_threshold_seconds: int = 180
+    observation_retention_days: int = 14
+    observation_max_rows: int = 20000
+    observation_redact_patterns: list[str] = field(default_factory=list)
+
     # proactive questions (context-gap nudges from the scheduler)
     onboarding_enabled: bool = True
     proactive_questions_enabled: bool = True
@@ -105,6 +115,13 @@ class SettingsForm:
     proactive_max_questions_per_batch: int = 3
     proactive_silence_default_hours: int = 24
     proactive_require_empty_agenda: bool = True
+
+    # periodic reflection
+    reflection_enabled: bool = True
+    reflection_interval_minutes: int = 20
+    reflection_min_gap_minutes: int = 60
+    reflection_quiet_after_nudge_minutes: int = 10
+    reflection_context_hours: int = 3
 
 
 # ── read from Config ───────────────────────────────────────────────────
@@ -120,6 +137,8 @@ def read_form(config: Config, *, autostart_enabled: bool = False) -> SettingsFor
     wh = rem.work_hours
     lw = config.logwatch
     aw = config.awareness
+    observation = config.observation
+    reflection = config.reflection
     return SettingsForm(
         screenshot_enabled=config.screenshot_enabled,
         auto_track_commitments=config.auto_track_commitments,
@@ -164,12 +183,24 @@ def read_form(config: Config, *, autostart_enabled: bool = False) -> SettingsFor
         awareness_cooldown_minutes=aw.cooldown_minutes,
         awareness_minimum_confidence=aw.minimum_confidence,
         awareness_focus_policy=aw.focus_policy,
+        observation_enabled=observation.enabled,
+        observation_sample_seconds=observation.sample_seconds,
+        observation_capture_window_titles=observation.capture_window_titles,
+        observation_idle_threshold_seconds=observation.idle_threshold_seconds,
+        observation_retention_days=observation.retention_days,
+        observation_max_rows=observation.max_rows,
+        observation_redact_patterns=list(observation.redact_patterns),
         onboarding_enabled=config.onboarding.enabled,
         proactive_questions_enabled=config.proactive_questions.enabled,
         proactive_min_gap_hours=config.proactive_questions.min_gap_hours,
         proactive_max_questions_per_batch=config.proactive_questions.max_questions_per_batch,
         proactive_silence_default_hours=config.proactive_questions.silence_default_hours,
         proactive_require_empty_agenda=config.proactive_questions.require_empty_agenda,
+        reflection_enabled=reflection.enabled,
+        reflection_interval_minutes=reflection.interval_minutes,
+        reflection_min_gap_minutes=reflection.min_gap_minutes,
+        reflection_quiet_after_nudge_minutes=reflection.quiet_after_nudge_minutes,
+        reflection_context_hours=reflection.context_hours,
     )
 
 
@@ -278,6 +309,22 @@ def validate(
     if not (0.0 <= form.awareness_minimum_confidence <= 1.0):
         errors.append("Awareness confidence must be between 0.0 and 1.0")
 
+    # screen observation
+    if not (5 <= form.observation_sample_seconds <= 300):
+        errors.append("Screen observation sample interval must be 5–300 seconds")
+    if not (30 <= form.observation_idle_threshold_seconds <= 3600):
+        errors.append("Screen observation idle threshold must be 30–3600 seconds")
+    if not (1 <= form.observation_retention_days <= 365):
+        errors.append("Screen observation retention must be 1–365 days")
+    if not (500 <= form.observation_max_rows <= 100000):
+        errors.append("Screen observation max rows must be 500–100000")
+    for pattern in form.observation_redact_patterns:
+        try:
+            re.compile(pattern)
+        except re.error as exc:
+            errors.append(f"Screen observation redact pattern {pattern!r} is invalid: {exc}")
+            break
+
     # proactive questions
     if not (3 <= form.proactive_min_gap_hours <= 24):
         errors.append("Proactive questions gap must be 3–24 hours")
@@ -285,6 +332,16 @@ def validate(
         errors.append("Proactive questions per batch must be 1–5")
     if not (1 <= form.proactive_silence_default_hours <= 168):
         errors.append("Proactive silence duration must be 1–168 hours")
+
+    # reflection
+    if not (5 <= form.reflection_interval_minutes <= 240):
+        errors.append("Reflection interval must be 5–240 minutes")
+    if not (15 <= form.reflection_min_gap_minutes <= 480):
+        errors.append("Reflection minimum gap must be 15–480 minutes")
+    if not (0 <= form.reflection_quiet_after_nudge_minutes <= 120):
+        errors.append("Reflection quiet after nudge must be 0–120 minutes")
+    if not (1 <= form.reflection_context_hours <= 24):
+        errors.append("Reflection context must be 1–24 hours")
 
     return errors
 
@@ -345,6 +402,15 @@ def apply_to_config(form: SettingsForm, config: Config) -> None:
     aw.minimum_confidence = form.awareness_minimum_confidence
     aw.focus_policy = form.awareness_focus_policy
 
+    observation = config.observation
+    observation.enabled = form.observation_enabled
+    observation.sample_seconds = form.observation_sample_seconds
+    observation.capture_window_titles = form.observation_capture_window_titles
+    observation.idle_threshold_seconds = form.observation_idle_threshold_seconds
+    observation.retention_days = form.observation_retention_days
+    observation.max_rows = form.observation_max_rows
+    observation.redact_patterns = list(form.observation_redact_patterns)
+
     config.onboarding.enabled = form.onboarding_enabled
 
     pq = config.proactive_questions
@@ -353,6 +419,13 @@ def apply_to_config(form: SettingsForm, config: Config) -> None:
     pq.max_questions_per_batch = form.proactive_max_questions_per_batch
     pq.silence_default_hours = form.proactive_silence_default_hours
     pq.require_empty_agenda = form.proactive_require_empty_agenda
+
+    reflection = config.reflection
+    reflection.enabled = form.reflection_enabled
+    reflection.interval_minutes = form.reflection_interval_minutes
+    reflection.min_gap_minutes = form.reflection_min_gap_minutes
+    reflection.quiet_after_nudge_minutes = form.reflection_quiet_after_nudge_minutes
+    reflection.context_hours = form.reflection_context_hours
 
 
 def detect_changes(old: SettingsForm, new: SettingsForm) -> dict[str, bool]:
