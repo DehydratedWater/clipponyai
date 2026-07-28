@@ -40,7 +40,7 @@ from open_agent_compiler.interactive import build_interactive_spec, run_interact
 from open_agent_compiler.interactive.spec import ToolSpec
 
 from .accountability import ActivityStore, get_stores
-from .characters import build_system_prompt, get_character
+from .characters import build_proactive_prompt, build_system_prompt, get_character
 from .config import Config
 from .digest import render_activity_digest
 from .goals import GoalEngine
@@ -107,16 +107,20 @@ def _is_assistant_command(text: str) -> bool:
     return normalized.startswith(_ASSISTANT_COMMAND_PREFIXES)
 
 
-# Proactive messages — reminder nudges, awareness observations — are the pony
+# Proactive messages — reminders and reflections — are the pony
 # speaking into the one shared conversation, so they land in the chat lane's
 # history as ordinary assistant turns. Unbounded, they take the window over: an
 # awareness nudge every cooldown fills it within hours, and the fast model then
 # continues the pattern it sees most instead of answering — replying to "what
 # sport have I been doing?" with another screen observation. Keep only the last
-# few so "done!" still answers the nudge the pony actually sent, and drop the
-# rest. Measured on the local fast lane against a 40-message history that was
-# 21 nudges: parroted 11/15 unfiltered, 0/8 at this cap, 3/8 at three.
-PROACTIVE_SOURCES = frozenset({"reminder"})
+# few per source so "done!" still answers the relevant nudge, without one
+# proactive channel evicting another. Measured on the local fast lane against a
+# 40-message history that was 21 nudges: parroted 11/15 unfiltered, 0/8 at this
+# cap, 3/8 at three. Two sources can now contribute four messages, but that
+# measurement used raw third-person analyst prose; awareness now rewrites every
+# such note into short, first-person, in-persona speech, removing the dominant
+# off-pattern the chat model continued.
+PROACTIVE_SOURCES = frozenset({"reminder", "reflection"})
 PROACTIVE_HISTORY_LIMIT = 2
 
 # The same text reaches the chat lane a second way: the awareness lane writes
@@ -140,8 +144,14 @@ def chat_history(messages: list[dict], keep_proactive: int = PROACTIVE_HISTORY_L
     Takes `recent_messages(..., with_source=True)` rows and returns plain
     role/content dicts — the API rejects anything else.
     """
-    proactive = [i for i, m in enumerate(messages) if m.get("source") in PROACTIVE_SOURCES]
-    dropped = set(proactive[: max(0, len(proactive) - keep_proactive)])
+    by_source: dict[str, list[int]] = {}
+    for i, message in enumerate(messages):
+        source = message.get("source")
+        if source in PROACTIVE_SOURCES:
+            by_source.setdefault(source, []).append(i)
+    dropped: set[int] = set()
+    for indexes in by_source.values():
+        dropped.update(indexes[: max(0, len(indexes) - keep_proactive)])
     return [
         {"role": m["role"], "content": m["content"]}
         for i, m in enumerate(messages)
@@ -893,6 +903,35 @@ class PonyBrain:
         return self._spec(FAST).model_copy(
             update={"system_prompt": system_prompt, "agent_id": agent_id, "tools": ()},
         )
+
+    def voice(self, note: str, *, kind: str = "note") -> str:
+        """Say a flat sensor note in the pony's own voice.
+
+        Never raises and never returns empty: on any failure the raw note comes
+        back, because losing a nudge is worse than an unpolished one.
+        """
+        try:
+            spec = self._spec(FAST).model_copy(
+                update={
+                    "system_prompt": build_proactive_prompt(get_character(self.character_slug)),
+                    "agent_id": "pony-voice",
+                    "tools": (),
+                }
+            )
+            user_turn = (
+                "[sensor note — a program's description of the screen, not your "
+                "words and not theirs]\n"
+                f"{note}\n\n"
+                "Say this to your friend in your own voice, in one or two sentences."
+            )
+            result = self._run(spec, user_turn)
+            spoken = result.output_text.strip()
+            if spoken:
+                return spoken
+            log.warning("%s voice pass returned empty output; using raw note", kind)
+        except Exception:
+            log.warning("%s voice pass failed; using raw note", kind, exc_info=True)
+        return note
 
     def _run(
         self,

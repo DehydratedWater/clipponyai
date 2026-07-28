@@ -853,6 +853,57 @@ class TestFailureHandling:
         await monitor.stop()
 
 
+class TestProactiveVoice:
+    async def test_intervention_is_rewritten_and_keeps_pony_prefix(
+        self, config, store, fake_screenshot
+    ):
+        config.awareness.enabled = True
+        config.screenshot_enabled = True
+        assessor = FakeAssessor(make_assessment(True, 0.95, "The user is scrolling social media."))
+        deliver_mock = AsyncMock()
+        notes = []
+
+        def voice(note):
+            notes.append(note)
+            return "Hey, eyes back on the prize."
+
+        monitor = AwarenessMonitor(
+            config,
+            lambda: fake_screenshot,
+            assessor,
+            store,
+            deliver_mock,
+            clock=FakeClock(),
+            voice_fn=voice,
+        )
+
+        await monitor._tick()
+
+        assert notes == ["The user is scrolling social media."]
+        deliver_mock.assert_awaited_once_with("🐴 Hey, eyes back on the prize.")
+
+    async def test_intervention_without_voice_keeps_raw_reason(
+        self, config, store, fake_screenshot
+    ):
+        config.awareness.enabled = True
+        config.screenshot_enabled = True
+        assessor = FakeAssessor(make_assessment(True, 0.95, "Return to the report."))
+        deliver_mock = AsyncMock()
+        monitor = AwarenessMonitor(
+            config,
+            lambda: fake_screenshot,
+            assessor,
+            store,
+            deliver_mock,
+            clock=FakeClock(),
+            voice_fn=None,
+        )
+
+        await monitor._tick()
+
+        deliver_mock.assert_awaited_once_with("🐴 Return to the report.")
+
+
 # ── lifecycle ─────────────────────────────────────────────────────────
 
 

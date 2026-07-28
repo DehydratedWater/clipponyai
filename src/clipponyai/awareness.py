@@ -290,6 +290,7 @@ class AwarenessMonitor:
         clock: Any | None = None,  # Clock protocol
         activity_store: Any | None = None,  # ActivityStore for logging
         observation_store: Any | None = None,  # ObservationStore for sensor readings
+        voice_fn: Callable[[str], str] | None = None,
     ) -> None:
         self.config = config
         self.screenshot_fn = screenshot_fn
@@ -299,6 +300,7 @@ class AwarenessMonitor:
         self.clock = clock if clock is not None else _RealClock()
         self.activity_store = activity_store
         self.observation_store = observation_store
+        self._voice_fn = voice_fn
         self._task: asyncio.Task | None = None
         self._stop = asyncio.Event()
 
@@ -423,7 +425,12 @@ class AwarenessMonitor:
             return
 
         # Deliver nudge, then record that an intervention really occurred.
-        message = f"\U0001f434 {assessment.reason}"
+        spoken = (
+            await asyncio.to_thread(self._voice_fn, assessment.reason)
+            if self._voice_fn
+            else assessment.reason
+        )
+        message = f"\U0001f434 {spoken}"
         log.info(
             "awareness: interrupting — %s (confidence=%.2f)",
             assessment.reason,

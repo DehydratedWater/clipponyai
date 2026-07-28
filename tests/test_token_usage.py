@@ -100,6 +100,7 @@ def test_lane_mapping_all_lanes():
     assert lane_from_agent_id("pony") == "chat"
     assert lane_from_agent_id("pony-slow") == "slow"
     assert lane_from_agent_id("pony-vision") == "vision"
+    assert lane_from_agent_id("pony-voice") == "sensor"
     assert lane_from_agent_id("message-sensor") == "sensor"
     assert lane_from_agent_id("when-sensor") == "sensor"
     assert lane_from_agent_id("log-analyst") == "sensor"
@@ -110,6 +111,7 @@ def test_purpose_mapping_all_purposes():
     assert purpose_from_agent_id("pony") == "chat"
     assert purpose_from_agent_id("pony-slow") == "deep_think"
     assert purpose_from_agent_id("pony-vision") == "look_at_screen"
+    assert purpose_from_agent_id("pony-voice") == "voice"
     assert purpose_from_agent_id("message-sensor") == "message-sensor"
     assert purpose_from_agent_id("when-sensor") == "when-sensor"
     assert purpose_from_agent_id("log-analyst") == "log-analyst"
@@ -212,15 +214,26 @@ def test_capture_estimated_usage():
     recorded: list[dict] = []
 
     def cb(lane, purpose, provider, model, pt, ct, estimated):
-        recorded.append({
-            "lane": lane, "purpose": purpose, "provider": provider,
-            "model": model, "pt": pt, "ct": ct, "estimated": estimated,
-        })
+        recorded.append(
+            {
+                "lane": lane,
+                "purpose": purpose,
+                "provider": provider,
+                "model": model,
+                "pt": pt,
+                "ct": ct,
+                "estimated": estimated,
+            }
+        )
 
     inner = _FakeNoUsage(content="hello there")
     wrapper = TokenCaptureClient(
-        inner, cb,
-        lane="chat", purpose="chat", provider="openai", model="gpt-4o-mini",
+        inner,
+        cb,
+        lane="chat",
+        purpose="chat",
+        provider="openai",
+        model="gpt-4o-mini",
     )
     wrapper.complete(
         messages=[{"role": "user", "content": "hi"}],
@@ -248,8 +261,12 @@ def test_capture_exact_usage():
     inner = _FakeNoUsage(content="exact answer")
     inner._last_response = _make_fake_raw(42, 17)
     wrapper = TokenCaptureClient(
-        inner, cb,
-        lane="slow", purpose="deep_think", provider="openai", model="gpt-4o",
+        inner,
+        cb,
+        lane="slow",
+        purpose="deep_think",
+        provider="openai",
+        model="gpt-4o",
     )
     wrapper.complete(
         messages=[{"role": "user", "content": "think hard"}],
@@ -271,8 +288,12 @@ def test_capture_no_double_record():
 
     inner = _FakeNoUsage(content="ok")
     wrapper = TokenCaptureClient(
-        inner, cb,
-        lane="chat", purpose="chat", provider="openai", model="gpt-4o-mini",
+        inner,
+        cb,
+        lane="chat",
+        purpose="chat",
+        provider="openai",
+        model="gpt-4o-mini",
     )
     wrapper.complete(messages=[{"role": "user", "content": "a"}], model="gpt-4o-mini")
     wrapper.complete(messages=[{"role": "user", "content": "b"}], model="gpt-4o-mini")
@@ -284,8 +305,12 @@ def test_capture_forwards_calls_and_spec():
     fake_spec = type("FakeSpec", (), {"agent_id": "pony"})()
     inner = _FakeNoUsage(content="ok", spec=fake_spec)
     wrapper = TokenCaptureClient(
-        inner, lambda *a: None,
-        lane="chat", purpose="chat", provider="openai", model="gpt-4o-mini",
+        inner,
+        lambda *a: None,
+        lane="chat",
+        purpose="chat",
+        provider="openai",
+        model="gpt-4o-mini",
     )
     wrapper.complete(messages=[{"role": "user", "content": "hi"}], model="gpt-4o-mini")
     assert len(wrapper.calls) == 1
@@ -308,11 +333,13 @@ def _make_brain(store, callback, lane_name):
                 self.calls.append({"messages": list(messages)})
                 if lane_name == "sensor":
                     return ChatResponse(
-                        content=json.dumps({
-                            "done_task_ids": [],
-                            "maybe_done_task_ids": [],
-                            "commitments": [],
-                        }),
+                        content=json.dumps(
+                            {
+                                "done_task_ids": [],
+                                "maybe_done_task_ids": [],
+                                "commitments": [],
+                            }
+                        ),
                         tool_calls=[],
                     )
                 return ChatResponse(content="response", tool_calls=[])
@@ -320,7 +347,10 @@ def _make_brain(store, callback, lane_name):
         return C(spec)
 
     return PonyBrain(
-        Config(), store, client_factory=factory, token_callback=callback,
+        Config(),
+        store,
+        client_factory=factory,
+        token_callback=callback,
     )
 
 
@@ -398,13 +428,18 @@ def test_brain_wired_to_store(store):
         return C(spec)
 
     brain = PonyBrain(
-        Config(), store, client_factory=factory,
-        token_callback=lambda lane, purpose, provider, model, pt, ct, est:
-            token_usage.record(
-                lane=lane, purpose=purpose, provider=provider,
-                model=model, prompt_tokens=pt, completion_tokens=ct,
-                estimated=est,
-            ),
+        Config(),
+        store,
+        client_factory=factory,
+        token_callback=lambda lane, purpose, provider, model, pt, ct, est: token_usage.record(
+            lane=lane,
+            purpose=purpose,
+            provider=provider,
+            model=model,
+            prompt_tokens=pt,
+            completion_tokens=ct,
+            estimated=est,
+        ),
     )
     brain._run(brain._spec("fast"), "hi")
     entries = token_usage.recent()
@@ -430,7 +465,10 @@ def test_brain_no_callback_silent(store):
         return C(spec)
 
     brain = PonyBrain(
-        Config(), store, client_factory=factory, token_callback=None,
+        Config(),
+        store,
+        client_factory=factory,
+        token_callback=None,
     )
     brain._run(brain._spec("fast"), "hi")
     assert token_usage.recent() == []

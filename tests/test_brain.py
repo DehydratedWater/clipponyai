@@ -65,6 +65,57 @@ def test_chat_history_never_drops_real_exchanges():
     ]
 
 
+def test_chat_history_applies_proactive_budget_per_source():
+    from clipponyai.brain import chat_history
+
+    messages = [
+        {"role": "assistant", "content": f"reminder {i}", "source": "reminder"} for i in range(4)
+    ]
+    messages += [
+        {"role": "assistant", "content": f"reflection {i}", "source": "reflection"}
+        for i in range(4)
+    ]
+
+    assert chat_history(messages, keep_proactive=2) == [
+        {"role": "assistant", "content": "reminder 2"},
+        {"role": "assistant", "content": "reminder 3"},
+        {"role": "assistant", "content": "reflection 2"},
+        {"role": "assistant", "content": "reflection 3"},
+    ]
+
+
+def test_chat_history_zero_budget_drops_all_proactive_but_keeps_real_messages():
+    from clipponyai.brain import chat_history
+
+    messages = [
+        {"role": "user", "content": "real question", "source": "desktop"},
+        {"role": "assistant", "content": "old reminder", "source": "reminder"},
+        {"role": "assistant", "content": "old reflection", "source": "reflection"},
+        {"role": "assistant", "content": "real answer", "source": "telegram"},
+    ]
+
+    assert chat_history(messages, keep_proactive=0) == [
+        {"role": "user", "content": "real question"},
+        {"role": "assistant", "content": "real answer"},
+    ]
+
+
+def test_chat_history_keeps_newest_message_from_each_proactive_source():
+    from clipponyai.brain import chat_history
+
+    messages = [
+        {"role": "assistant", "content": "reminder old", "source": "reminder"},
+        {"role": "assistant", "content": "reflection old", "source": "reflection"},
+        {"role": "assistant", "content": "reminder newest", "source": "reminder"},
+        {"role": "assistant", "content": "reflection newest", "source": "reflection"},
+    ]
+
+    assert chat_history(messages, keep_proactive=1) == [
+        {"role": "assistant", "content": "reminder newest"},
+        {"role": "assistant", "content": "reflection newest"},
+    ]
+
+
 async def test_awareness_nudges_do_not_flood_the_chat_lane(make_brain, store):
     """A stream of proactive nudges must not crowd the real conversation out
     of the window — that is what made the fast model answer questions with

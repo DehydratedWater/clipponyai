@@ -136,6 +136,7 @@ class Core:
             self._deliver_nudge,
             activity_store=self.accountability["activity"],
             observation_store=observation_store,
+            voice_fn=lambda note: self.brain.voice(note, kind="awareness"),
         )
         self.observation_recorder = ObservationRecorder(config, observation_store)
         self.channels: list[Channel] = []
@@ -218,10 +219,10 @@ class Core:
         )
 
     # ── reminders ────────────────────────────────────────────────────
-    async def _deliver_nudge(self, message: str) -> None:
+    async def _deliver_nudge(self, message: str, *, source: str = "reminder") -> None:
         # the nudge is part of the one conversation — the brain must know it
         # already pinged (and the user may answer "done" to it)
-        self.store.save_message("assistant", message, source="reminder")
+        self.store.save_message("assistant", message, source=source)
         for hook in self.nudge_hooks:
             try:
                 await hook(message)

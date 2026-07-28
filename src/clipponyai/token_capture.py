@@ -122,9 +122,7 @@ class TokenCaptureClient:
         model: str = "",
         **params: Any,
     ) -> Any:
-        response = self._inner.complete(
-            messages=messages, tools=tools, model=model, **params
-        )
+        response = self._inner.complete(messages=messages, tools=tools, model=model, **params)
         self._record(messages, tools, response)
         return response
 
@@ -143,9 +141,7 @@ class TokenCaptureClient:
             completion_text = getattr(response, "content", "") or ""
             completion_chars = len(completion_text)
             completion_tokens = (
-                max(1, completion_chars // _CHARS_PER_TOKEN)
-                if completion_chars
-                else 0
+                max(1, completion_chars // _CHARS_PER_TOKEN) if completion_chars else 0
             )
             estimated = True
 
@@ -191,9 +187,7 @@ class RawResponseOpenAICompatClient:
         self._last_response: Any = None
 
     @classmethod
-    def from_spec(
-        cls, spec: Any, *, api_key: str | None = None
-    ) -> "RawResponseOpenAICompatClient":
+    def from_spec(cls, spec: Any, *, api_key: str | None = None) -> "RawResponseOpenAICompatClient":
         """Build from an InteractiveAgentSpec (same contract as OpenAICompatClient)."""
         from open_agent_compiler.interactive.runner import _resolve_api_key
 
@@ -202,9 +196,7 @@ class RawResponseOpenAICompatClient:
             params["temperature"] = spec.temperature
         extra = spec.model.provider_options.get("extra_body")
         if extra:
-            params["extra_body"] = (
-                json.loads(extra) if isinstance(extra, str) else extra
-            )
+            params["extra_body"] = json.loads(extra) if isinstance(extra, str) else extra
         return cls(
             base_url=spec.base_url,
             api_key=_resolve_api_key(spec, api_key),
@@ -239,9 +231,7 @@ class RawResponseOpenAICompatClient:
         kwargs = {k: v for k, v in kwargs.items() if v is not None}
         if tools:
             kwargs["tools"] = tools
-        raw = client.chat.completions.create(
-            model=model, messages=messages, **kwargs
-        )
+        raw = client.chat.completions.create(model=model, messages=messages, **kwargs)
         self._last_response = raw  # capture for token accounting
         message = raw.choices[0].message
         calls = [
@@ -266,6 +256,8 @@ def lane_from_agent_id(agent_id: str) -> str:
         return "slow"
     if agent_id == "pony-vision":
         return "vision"
+    if agent_id == "pony-voice":
+        return "sensor"
     if "sensor" in agent_id or "analyst" in agent_id:
         return "sensor"
     return "other"
@@ -277,6 +269,7 @@ def purpose_from_agent_id(agent_id: str) -> str:
         "pony": "chat",
         "pony-slow": "deep_think",
         "pony-vision": "look_at_screen",
+        "pony-voice": "voice",
         "message-sensor": "message-sensor",
         "when-sensor": "when-sensor",
         "log-analyst": "log-analyst",
