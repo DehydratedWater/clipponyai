@@ -49,6 +49,9 @@ class Core:
         self.store = TaskStore(db_path())
         # Accountability stores (routines, goals, activity, …)
         self.accountability = get_stores(self.store)
+        observation_store = self.accountability["observations"]
+        observation_store.max_rows = config.observation.max_rows
+        observation_store.retention_days = config.observation.retention_days
         # Wire token-usage callback into the brain
         token_usage_store = self.accountability["token_usage"]
 
@@ -71,16 +74,14 @@ class Core:
                 estimated=estimated,
             )
 
-        self.mcp_manager = (
-            mcp_manager if mcp_manager is not None else MCPManager(config.mcp)
-        )
+        self.mcp_manager = mcp_manager if mcp_manager is not None else MCPManager(config.mcp)
         self.skills_library = (
-            skills_library
-            if skills_library is not None
-            else SkillsLibrary(config.skills)
+            skills_library if skills_library is not None else SkillsLibrary(config.skills)
         )
         self.brain = PonyBrain(
-            config, self.store, screenshot_fn=screenshot_fn,
+            config,
+            self.store,
+            screenshot_fn=screenshot_fn,
             log_fn=lambda: read_recent_logs(config.logwatch),
             client_factory=client_factory,
             token_callback=_token_callback,
@@ -116,7 +117,9 @@ class Core:
         self.brain._set_proactive_questioner(self.proactive_questioner)
 
         self.scheduler = ReminderScheduler(
-            self.store, config.reminders, self._deliver_nudge,
+            self.store,
+            config.reminders,
+            self._deliver_nudge,
             work_hours=config.reminders.work_hours,
             routine_engine=routine_engine,
             goal_engine=goal_engine,
@@ -125,12 +128,16 @@ class Core:
             proactive_questioner=self.proactive_questioner,
         )
         self.awareness_monitor = AwarenessMonitor(
-            config, screenshot_fn, self._make_assessor(), self.store, self._deliver_nudge,
+            config,
+            screenshot_fn,
+            self._make_assessor(),
+            self.store,
+            self._deliver_nudge,
             activity_store=self.accountability["activity"],
         )
         self.channels: list[Channel] = []
-        self.observers: list[Observer] = []      # GUI mirrors exchanges live
-        self.nudge_hooks: list[Deliver] = []     # GUI shows nudges (bubble + chase)
+        self.observers: list[Observer] = []  # GUI mirrors exchanges live
+        self.nudge_hooks: list[Deliver] = []  # GUI shows nudges (bubble + chase)
         self._tasks: list[asyncio.Task] = []
 
     # ── conversation ─────────────────────────────────────────────────
@@ -244,9 +251,7 @@ class Core:
         await self._deliver_nudge(prompt)
 
     async def start(self) -> None:
-        enabled_servers = sum(
-            server.enabled for server in self.config.mcp.servers.values()
-        )
+        enabled_servers = sum(server.enabled for server in self.config.mcp.servers.values())
         if self.config.mcp.enabled and enabled_servers:
             log.info(
                 "MCP: %d servers configured, connecting in background...",
@@ -402,6 +407,7 @@ def run_gui(config: Config) -> int:
 
     def _states() -> set[str]:
         from .sprites import character_states
+
         return character_states(pony.character)
 
     chat.send_text.connect(lambda t: asyncio.ensure_future(on_send(t)))
@@ -479,8 +485,10 @@ def run_gui(config: Config) -> int:
     def on_peek(on: bool) -> None:
         core.set_screenshot_enabled(on)
         pony.screenshot_enabled = on
-        pony.say("👀 I can peek at your screen now (ask me!)" if on
-                 else "🙈 screen peeking off", msec=4000)
+        pony.say(
+            "👀 I can peek at your screen now (ask me!)" if on else "🙈 screen peeking off",
+            msec=4000,
+        )
 
     # ── dashboard (lazy singleton) ──────────────────────────────────
     _dashboard = None
@@ -489,6 +497,7 @@ def run_gui(config: Config) -> int:
         nonlocal _dashboard
         if _dashboard is None:
             from .dashboard import DashboardWindow
+
             _dashboard = DashboardWindow(core)
         return _dashboard
 
@@ -524,6 +533,7 @@ def run_gui(config: Config) -> int:
             await core.stop()
             tray.hide()
             app.quit()
+
         asyncio.ensure_future(_shutdown())
 
     pony.quit_requested.connect(quit_app)
@@ -550,8 +560,10 @@ def run_gui(config: Config) -> int:
     if QSystemTrayIcon.isSystemTrayAvailable():
         tray.show()
     else:
-        log.warning("no system tray detected; hiding the pony is still reversible "
-                    "by clicking the tray area if one appears later")
+        log.warning(
+            "no system tray detected; hiding the pony is still reversible "
+            "by clicking the tray area if one appears later"
+        )
 
     pony.show()
     with loop:

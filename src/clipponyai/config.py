@@ -11,6 +11,7 @@ environment variable (``api_key_env``) that holds the key.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import yaml
@@ -152,9 +153,7 @@ class MCPConfig(BaseModel):
 
     @field_validator("servers")
     @classmethod
-    def _valid_server_names(
-        cls, value: dict[str, MCPServerConfig]
-    ) -> dict[str, MCPServerConfig]:
+    def _valid_server_names(cls, value: dict[str, MCPServerConfig]) -> dict[str, MCPServerConfig]:
         import re
 
         for name in value:
@@ -185,11 +184,11 @@ class WorkHoursConfig(BaseModel):
     """
 
     enabled: bool = False
-    start: str = "09:00"   # HH:MM workday start
-    end: str = "17:00"     # HH:MM workday end
+    start: str = "09:00"  # HH:MM workday start
+    end: str = "17:00"  # HH:MM workday end
     weekdays: list[int] = Field(default=[0, 1, 2, 3, 4])  # Mon=0 .. Sun=6
-    closing_nudge: bool = True           # list pending tasks at end of workday
-    suppress_off_hours: bool = False     # silence ordinary reminders outside work hours
+    closing_nudge: bool = True  # list pending tasks at end of workday
+    suppress_off_hours: bool = False  # silence ordinary reminders outside work hours
 
     @field_validator("start", "end")
     @classmethod
@@ -314,6 +313,56 @@ class AwarenessConfig(BaseModel):
         return v
 
 
+class ObservationConfig(BaseModel):
+    """Continuous foreground observations — privacy off by default."""
+
+    enabled: bool = False
+    sample_seconds: int = 15
+    capture_window_titles: bool = True
+    idle_threshold_seconds: int = 180
+    retention_days: int = 14
+    max_rows: int = 20000
+    redact_patterns: list[str] = Field(default_factory=list)
+
+    @field_validator("sample_seconds")
+    @classmethod
+    def _sample_range(cls, v: int) -> int:
+        if not (5 <= v <= 300):
+            raise ValueError("sample_seconds must be between 5 and 300")
+        return v
+
+    @field_validator("idle_threshold_seconds")
+    @classmethod
+    def _idle_range(cls, v: int) -> int:
+        if not (30 <= v <= 3600):
+            raise ValueError("idle_threshold_seconds must be between 30 and 3600")
+        return v
+
+    @field_validator("retention_days")
+    @classmethod
+    def _retention_range(cls, v: int) -> int:
+        if not (1 <= v <= 365):
+            raise ValueError("retention_days must be between 1 and 365")
+        return v
+
+    @field_validator("max_rows")
+    @classmethod
+    def _max_rows_range(cls, v: int) -> int:
+        if not (500 <= v <= 100000):
+            raise ValueError("max_rows must be between 500 and 100000")
+        return v
+
+    @field_validator("redact_patterns")
+    @classmethod
+    def _valid_redact_patterns(cls, v: list[str]) -> list[str]:
+        for pattern in v:
+            try:
+                re.compile(pattern)
+            except re.error as exc:
+                raise ValueError(f"invalid redact pattern {pattern!r}: {exc}") from exc
+        return v
+
+
 class OnboardingConfig(BaseModel):
     """First-run onboarding: collect initial context via chat (no GUI wizard)."""
 
@@ -365,6 +414,7 @@ class Config(BaseModel):
     telegram: TelegramConfig = Field(default_factory=TelegramConfig)
     logwatch: LogWatchConfig = Field(default_factory=LogWatchConfig)
     awareness: AwarenessConfig = Field(default_factory=AwarenessConfig)
+    observation: ObservationConfig = Field(default_factory=ObservationConfig)
     onboarding: OnboardingConfig = Field(default_factory=OnboardingConfig)
     proactive_questions: ProactiveQuestionsConfig = Field(default_factory=ProactiveQuestionsConfig)
     # privacy: the pony can only look at your screen when you turn this on

@@ -31,13 +31,17 @@ def test_fresh_schema_creates_all_tables(store):
     get_stores(store)
     tables = [
         r[0]
-        for r in store._conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        ).fetchall()
+        for r in store._conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
     ]
     for expected in (
-        "routines", "routine_completions", "goals", "goal_progress",
-        "accountability_rules", "activity_log", "token_usage",
+        "routines",
+        "routine_completions",
+        "goals",
+        "goal_progress",
+        "accountability_rules",
+        "activity_log",
+        "token_usage",
+        "observations",
     ):
         assert expected in tables, f"missing table {expected}"
 
@@ -62,8 +66,10 @@ def test_reopen_idempotent(tmp_path):
 
 def test_routine_add(stores):
     r = stores["routines"].add(
-        "Morning stretch", cadence="weekdays",
-        weekdays=[0, 1, 2, 3, 4], time_of_day="07:00",
+        "Morning stretch",
+        cadence="weekdays",
+        weekdays=[0, 1, 2, 3, 4],
+        time_of_day="07:00",
     )
     assert r.title == "Morning stretch"
     assert r.cadence == "weekdays"
@@ -228,8 +234,10 @@ def test_goal_progress_by_goal(stores):
 
 def test_rule_add(stores):
     rule = stores["rules"].add(
-        "No phone after 11", rule_type="time",
-        condition="hour > 23", message="Put the phone away!",
+        "No phone after 11",
+        rule_type="time",
+        condition="hour > 23",
+        message="Put the phone away!",
         cooldown_minutes=60,
     )
     assert rule.title == "No phone after 11"
@@ -318,9 +326,12 @@ def test_activity_prune_exact_200(stores):
 
 def test_token_record(stores):
     t = stores["token_usage"].record(
-        lane="chat", purpose="user_query",
-        provider="openai", model="gpt-4",
-        prompt_tokens=100, completion_tokens=200,
+        lane="chat",
+        purpose="user_query",
+        provider="openai",
+        model="gpt-4",
+        prompt_tokens=100,
+        completion_tokens=200,
     )
     assert t.total_tokens == 300
     assert t.lane == "chat"

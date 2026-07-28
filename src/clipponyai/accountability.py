@@ -10,7 +10,7 @@ import json
 import sqlite3
 from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from .tasks import ISO, TaskStore
@@ -91,6 +91,26 @@ class ActivityLog:
     ref_id: str | None
 
 
+@dataclass(frozen=True)
+class Observation:
+    id: int
+    started_at: datetime
+    ended_at: datetime
+    source: str
+    app: str
+    window_title: str
+    category: str
+    activity: str
+    detail: str
+    idle_seconds: int
+    confidence: float
+    payload: str
+
+    @property
+    def duration_seconds(self) -> float:
+        return (self.ended_at - self.started_at).total_seconds()
+
+
 @dataclass
 class TokenUsage:
     id: int
@@ -106,6 +126,7 @@ class TokenUsage:
 
 
 # ─── JSON helpers ────────────────────────────────────────────────────
+
 
 def _json_dumps(obj: Any) -> str:
     return json.dumps(obj, separators=(",", ":"))
@@ -211,12 +232,59 @@ CREATE TABLE IF NOT EXISTS token_usage (
     total_tokens INTEGER NOT NULL DEFAULT 0,
     estimated INTEGER NOT NULL DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS observations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    started_at TEXT NOT NULL,
+    ended_at TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'os',
+    app TEXT NOT NULL DEFAULT '',
+    window_title TEXT NOT NULL DEFAULT '',
+    category TEXT NOT NULL DEFAULT 'unknown',
+    activity TEXT NOT NULL DEFAULT '',
+    detail TEXT NOT NULL DEFAULT '',
+    idle_seconds INTEGER NOT NULL DEFAULT 0,
+    confidence REAL NOT NULL DEFAULT 0.0,
+    payload TEXT NOT NULL DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS idx_observations_started_at ON observations(started_at);
 """
+
+
+_OBSERVATION_COLUMNS = {
+    "started_at": "TEXT NOT NULL DEFAULT ''",
+    "ended_at": "TEXT NOT NULL DEFAULT ''",
+    "source": "TEXT NOT NULL DEFAULT 'os'",
+    "app": "TEXT NOT NULL DEFAULT ''",
+    "window_title": "TEXT NOT NULL DEFAULT ''",
+    "category": "TEXT NOT NULL DEFAULT 'unknown'",
+    "activity": "TEXT NOT NULL DEFAULT ''",
+    "detail": "TEXT NOT NULL DEFAULT ''",
+    "idle_seconds": "INTEGER NOT NULL DEFAULT 0",
+    "confidence": "REAL NOT NULL DEFAULT 0.0",
+    "payload": "TEXT NOT NULL DEFAULT ''",
+}
+
+
+def _ensure_columns(conn: sqlite3.Connection, table: str, columns: dict[str, str]) -> None:
+    """Add any missing columns to an existing table.
+
+    ``CREATE TABLE IF NOT EXISTS`` is a no-op on a database that already has the
+    table, so a column added to the DDL never reaches existing installs. This
+    closes that gap. Declarations must be nullable or ``NOT NULL DEFAULT <const>``
+    — SQLite's ``ADD COLUMN`` rejects non-constant defaults.
+    """
+    have = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+    for name, decl in columns.items():
+        if name not in have:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
 
 
 def _ensure_schema(conn: sqlite3.Connection) -> None:
     """Create accountability tables if missing. Idempotent."""
     conn.executescript(_ACCOUNTABILITY_SCHEMA)
+    _ensure_columns(conn, "observations", _OBSERVATION_COLUMNS)
     conn.commit()
 
 
@@ -270,8 +338,16 @@ class RoutineStore:
                 "day_of_month, deadline_time, priority, enabled, created_at) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
-                    title, notes, cadence, _json_dumps(weekdays), time_of_day,
-                    day_of_month, deadline_time, priority, int(enabled), now,
+                    title,
+                    notes,
+                    cadence,
+                    _json_dumps(weekdays),
+                    time_of_day,
+                    day_of_month,
+                    deadline_time,
+                    priority,
+                    int(enabled),
+                    now,
                 ),
             )
             self._store._conn.commit()
@@ -293,9 +369,7 @@ class RoutineStore:
     def list_all(self, *, include_archived: bool = False) -> list[Routine]:
         with self._store._lock:
             if include_archived:
-                rows = self._store._conn.execute(
-                    "SELECT * FROM routines ORDER BY id"
-                ).fetchall()
+                rows = self._store._conn.execute("SELECT * FROM routines ORDER BY id").fetchall()
             else:
                 rows = self._store._conn.execute(
                     "SELECT * FROM routines WHERE archived_at IS NULL ORDER BY id"
@@ -354,9 +428,7 @@ class RoutineStore:
             if not updates:
                 return self._row(row)
             vals.append(routine_id)
-            self._store._conn.execute(
-                f"UPDATE routines SET {', '.join(updates)} WHERE id=?", vals
-            )
+            self._store._conn.execute(f"UPDATE routines SET {', '.join(updates)} WHERE id=?", vals)
             self._store._conn.commit()
             return self._row(
                 self._store._conn.execute(
@@ -444,8 +516,7 @@ class RoutineCompletionStore:
             )
             self._store._conn.commit()
             row = self._store._conn.execute(
-                "SELECT * FROM routine_completions "
-                "WHERE routine_id=? AND occurrence_date=?",
+                "SELECT * FROM routine_completions WHERE routine_id=? AND occurrence_date=?",
                 (routine_id, occurrence_date),
             ).fetchone()
             return self._row(row)
@@ -460,9 +531,7 @@ class RoutineCompletionStore:
             ).fetchall()
             return [self._row(r) for r in rows]
 
-    def by_date_range(
-        self, start_date: str, end_date: str
-    ) -> list[RoutineCompletion]:
+    def by_date_range(self, start_date: str, end_date: str) -> list[RoutineCompletion]:
         with self._store._lock:
             rows = self._store._conn.execute(
                 "SELECT * FROM routine_completions "
@@ -511,8 +580,13 @@ class GoalStore:
                 "target_streak, linked_routine_ids, created_at) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (
-                    title, description, condition, target_count, target_streak,
-                    _json_dumps(linked_routine_ids), now,
+                    title,
+                    description,
+                    condition,
+                    target_count,
+                    target_streak,
+                    _json_dumps(linked_routine_ids),
+                    now,
                 ),
             )
             self._store._conn.commit()
@@ -524,18 +598,14 @@ class GoalStore:
 
     def get(self, goal_id: int) -> Goal:
         with self._store._lock:
-            row = self._store._conn.execute(
-                "SELECT * FROM goals WHERE id=?", (goal_id,)
-            ).fetchone()
+            row = self._store._conn.execute("SELECT * FROM goals WHERE id=?", (goal_id,)).fetchone()
             if row is None:
                 raise KeyError(f"no goal #{goal_id}")
             return self._row(row)
 
     def list_all(self) -> list[Goal]:
         with self._store._lock:
-            rows = self._store._conn.execute(
-                "SELECT * FROM goals ORDER BY id"
-            ).fetchall()
+            rows = self._store._conn.execute("SELECT * FROM goals ORDER BY id").fetchall()
             return [self._row(r) for r in rows]
 
     def update(
@@ -550,9 +620,7 @@ class GoalStore:
         linked_routine_ids: list[int] | None = None,
     ) -> Goal:
         with self._store._lock:
-            row = self._store._conn.execute(
-                "SELECT * FROM goals WHERE id=?", (goal_id,)
-            ).fetchone()
+            row = self._store._conn.execute("SELECT * FROM goals WHERE id=?", (goal_id,)).fetchone()
             if row is None:
                 raise KeyError(f"no goal #{goal_id}")
             updates: list[str] = []
@@ -578,14 +646,10 @@ class GoalStore:
             if not updates:
                 return self._row(row)
             vals.append(goal_id)
-            self._store._conn.execute(
-                f"UPDATE goals SET {', '.join(updates)} WHERE id=?", vals
-            )
+            self._store._conn.execute(f"UPDATE goals SET {', '.join(updates)} WHERE id=?", vals)
             self._store._conn.commit()
             return self._row(
-                self._store._conn.execute(
-                    "SELECT * FROM goals WHERE id=?", (goal_id,)
-                ).fetchone()
+                self._store._conn.execute("SELECT * FROM goals WHERE id=?", (goal_id,)).fetchone()
             )
 
     def achieve(self, goal_id: int) -> Goal:
@@ -597,9 +661,7 @@ class GoalStore:
             )
             self._store._conn.commit()
             return self._row(
-                self._store._conn.execute(
-                    "SELECT * FROM goals WHERE id=?", (goal_id,)
-                ).fetchone()
+                self._store._conn.execute("SELECT * FROM goals WHERE id=?", (goal_id,)).fetchone()
             )
 
     def reopen(self, goal_id: int) -> Goal:
@@ -611,17 +673,13 @@ class GoalStore:
             )
             self._store._conn.commit()
             return self._row(
-                self._store._conn.execute(
-                    "SELECT * FROM goals WHERE id=?", (goal_id,)
-                ).fetchone()
+                self._store._conn.execute("SELECT * FROM goals WHERE id=?", (goal_id,)).fetchone()
             )
 
     def set_links(self, goal_id: int, linked_routine_ids: list[int]) -> Goal:
         """Replace the linked routine IDs for a goal."""
         with self._store._lock:
-            row = self._store._conn.execute(
-                "SELECT * FROM goals WHERE id=?", (goal_id,)
-            ).fetchone()
+            row = self._store._conn.execute("SELECT * FROM goals WHERE id=?", (goal_id,)).fetchone()
             if row is None:
                 raise KeyError(f"no goal #{goal_id}")
             self._store._conn.execute(
@@ -630,21 +688,15 @@ class GoalStore:
             )
             self._store._conn.commit()
             return self._row(
-                self._store._conn.execute(
-                    "SELECT * FROM goals WHERE id=?", (goal_id,)
-                ).fetchone()
+                self._store._conn.execute("SELECT * FROM goals WHERE id=?", (goal_id,)).fetchone()
             )
 
     def cancel(self, goal_id: int) -> Goal:
         with self._store._lock:
-            self._store._conn.execute(
-                "UPDATE goals SET status='cancelled' WHERE id=?", (goal_id,)
-            )
+            self._store._conn.execute("UPDATE goals SET status='cancelled' WHERE id=?", (goal_id,))
             self._store._conn.commit()
             return self._row(
-                self._store._conn.execute(
-                    "SELECT * FROM goals WHERE id=?", (goal_id,)
-                ).fetchone()
+                self._store._conn.execute("SELECT * FROM goals WHERE id=?", (goal_id,)).fetchone()
             )
 
 
@@ -831,7 +883,6 @@ class AccountabilityRuleStore:
                 ).fetchone()
             )
 
-
     def record_fire_at(self, rule_id: int, fired_at: datetime) -> AccountabilityRule:
         """Record a rule fire at a specific datetime (for deterministic testing)."""
         ts = fired_at.strftime(ISO)
@@ -854,9 +905,7 @@ class AccountabilityRuleStore:
             ).fetchone()
             if row is None:
                 raise KeyError(f"no rule #{rule_id}")
-            self._store._conn.execute(
-                "DELETE FROM accountability_rules WHERE id=?", (rule_id,)
-            )
+            self._store._conn.execute("DELETE FROM accountability_rules WHERE id=?", (rule_id,))
             self._store._conn.commit()
 
 
@@ -904,9 +953,7 @@ class ActivityStore:
                 ).fetchone()
             )
 
-    def recent(
-        self, limit: int = 50, *, exclude_actions: Iterable[str] = ()
-    ) -> list[ActivityLog]:
+    def recent(self, limit: int = 50, *, exclude_actions: Iterable[str] = ()) -> list[ActivityLog]:
         """The newest entries, oldest first.
 
         `exclude_actions` leaves whole action kinds out — the chat lane uses it
@@ -936,6 +983,161 @@ class ActivityStore:
             self._store._conn.execute(
                 "DELETE FROM activity_log WHERE id IN "
                 "(SELECT id FROM activity_log ORDER BY id ASC LIMIT ?)",
+                (excess,),
+            )
+
+
+class ObservationStore:
+    """Structured screen observations with independent age and row retention."""
+
+    MAX_ROWS = 20000
+    RETENTION_DAYS = 14
+    _PRUNE_EVERY = 50
+
+    def __init__(
+        self,
+        task_store: TaskStore,
+        *,
+        max_rows: int | None = None,
+        retention_days: int | None = None,
+    ) -> None:
+        self._store = task_store
+        self.max_rows = self.MAX_ROWS if max_rows is None else max_rows
+        self.retention_days = self.RETENTION_DAYS if retention_days is None else retention_days
+        self._inserts_since_prune = 0
+
+    @staticmethod
+    def _row(row: sqlite3.Row) -> Observation:
+        return Observation(
+            id=row["id"],
+            started_at=_parse(row["started_at"]),
+            ended_at=_parse(row["ended_at"]),
+            source=row["source"],
+            app=row["app"],
+            window_title=row["window_title"],
+            category=row["category"],
+            activity=row["activity"],
+            detail=row["detail"],
+            idle_seconds=row["idle_seconds"],
+            confidence=row["confidence"],
+            payload=row["payload"],
+        )
+
+    def record(
+        self,
+        *,
+        started_at: datetime,
+        ended_at: datetime,
+        source: str = "os",
+        app: str = "",
+        window_title: str = "",
+        category: str = "unknown",
+        activity: str = "",
+        detail: str = "",
+        idle_seconds: int = 0,
+        confidence: float = 0.0,
+        payload: str = "",
+    ) -> Observation:
+        with self._store._lock:
+            cur = self._store._conn.execute(
+                "INSERT INTO observations "
+                "(started_at, ended_at, source, app, window_title, category, "
+                "activity, detail, idle_seconds, confidence, payload) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    _fmt(started_at),
+                    _fmt(ended_at),
+                    source,
+                    app,
+                    window_title,
+                    category,
+                    activity,
+                    detail,
+                    idle_seconds,
+                    confidence,
+                    payload,
+                ),
+            )
+            row = self._store._conn.execute(
+                "SELECT * FROM observations WHERE id=?", (cur.lastrowid,)
+            ).fetchone()
+            self._inserts_since_prune += 1
+            if self._inserts_since_prune >= self._PRUNE_EVERY:
+                self._prune_locked(started_at)
+                self._inserts_since_prune = 0
+            self._store._conn.commit()
+        return self._row(row)
+
+    def extend(self, observation_id: int, ended_at: datetime) -> None:
+        with self._store._lock:
+            self._store._conn.execute(
+                "UPDATE observations SET ended_at=? WHERE id=?",
+                (_fmt(ended_at), observation_id),
+            )
+            self._store._conn.commit()
+
+    def latest(self, *, source: str | None = None) -> Observation | None:
+        where = " WHERE source=?" if source is not None else ""
+        params = (source,) if source is not None else ()
+        with self._store._lock:
+            row = self._store._conn.execute(
+                f"SELECT * FROM observations{where} ORDER BY id DESC LIMIT 1", params
+            ).fetchone()
+        return self._row(row) if row is not None else None
+
+    def since(
+        self,
+        cutoff: datetime,
+        *,
+        sources: Iterable[str] = (),
+        limit: int = 1000,
+    ) -> list[Observation]:
+        source_values = tuple(sources)
+        conditions = ["started_at >= ?"]
+        params: list[Any] = [_fmt(cutoff)]
+        if source_values:
+            conditions.append(f"source IN ({','.join('?' * len(source_values))})")
+            params.extend(source_values)
+        params.append(limit)
+        with self._store._lock:
+            rows = self._store._conn.execute(
+                "SELECT * FROM observations WHERE "
+                + " AND ".join(conditions)
+                + " ORDER BY started_at ASC, id ASC LIMIT ?",
+                params,
+            ).fetchall()
+        return [self._row(row) for row in rows]
+
+    def recent(self, limit: int = 100, *, sources: Iterable[str] = ()) -> list[Observation]:
+        source_values = tuple(sources)
+        where = ""
+        params: list[Any] = []
+        if source_values:
+            where = f" WHERE source IN ({','.join('?' * len(source_values))})"
+            params.extend(source_values)
+        params.append(limit)
+        with self._store._lock:
+            rows = self._store._conn.execute(
+                f"SELECT * FROM observations{where} ORDER BY id DESC LIMIT ?", params
+            ).fetchall()
+        return [self._row(row) for row in reversed(rows)]
+
+    def count(self) -> int:
+        with self._store._lock:
+            return self._store._conn.execute("SELECT COUNT(*) FROM observations").fetchone()[0]
+
+    def _prune_locked(self, now: datetime) -> None:
+        """Apply age and row limits. The caller must hold the shared store lock."""
+        cutoff = _fmt(now - timedelta(days=self.retention_days))
+        self._store._conn.execute("DELETE FROM observations WHERE started_at < ?", (cutoff,))
+        excess = (
+            self._store._conn.execute("SELECT COUNT(*) FROM observations").fetchone()[0]
+            - self.max_rows
+        )
+        if excess > 0:
+            self._store._conn.execute(
+                "DELETE FROM observations WHERE id IN "
+                "(SELECT id FROM observations ORDER BY id ASC LIMIT ?)",
                 (excess,),
             )
 
@@ -978,8 +1180,15 @@ class TokenUsageStore:
                 "prompt_tokens, completion_tokens, total_tokens, estimated) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
-                    now, lane, purpose, provider, model,
-                    prompt_tokens, completion_tokens, total, int(estimated),
+                    now,
+                    lane,
+                    purpose,
+                    provider,
+                    model,
+                    prompt_tokens,
+                    completion_tokens,
+                    total,
+                    int(estimated),
                 ),
             )
             self._store._conn.commit()
@@ -1010,7 +1219,7 @@ class TokenUsageStore:
             where = "WHERE date(at) = ?"
             params = (today,)
         elif period == "7d":
-            seven = (datetime.now().strftime("%Y-%m-%d"))
+            seven = datetime.now().strftime("%Y-%m-%d")
             where = "WHERE at >= datetime(?, '-7 days')"
             params = (seven,)
         else:
@@ -1042,6 +1251,7 @@ class TokenUsageStore:
 
 # ─── Convenience factory ─────────────────────────────────────────────
 
+
 def get_stores(task_store: TaskStore) -> dict[str, Any]:
     """Ensure schema and return all accountability store instances."""
     with task_store._lock:
@@ -1053,5 +1263,6 @@ def get_stores(task_store: TaskStore) -> dict[str, Any]:
         "goal_progress": GoalProgressStore(task_store),
         "rules": AccountabilityRuleStore(task_store),
         "activity": ActivityStore(task_store),
+        "observations": ObservationStore(task_store),
         "token_usage": TokenUsageStore(task_store),
     }

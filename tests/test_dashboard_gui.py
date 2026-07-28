@@ -15,7 +15,7 @@ from datetime import datetime
 import pytest
 from PySide6.QtWidgets import QApplication
 
-from clipponyai.accountability import get_stores
+from clipponyai.accountability import _ensure_schema, get_stores
 from clipponyai.tasks import TaskStore
 
 
@@ -23,86 +23,7 @@ from clipponyai.tasks import TaskStore
 def core(tmp_path):
     """Build a minimal Core-like object with all accountability stores."""
     store = TaskStore(tmp_path / "test.db")
-    store._conn.executescript(
-        """
-        CREATE TABLE IF NOT EXISTS routines (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            title TEXT NOT NULL,
-            notes TEXT NOT NULL DEFAULT '',
-            cadence TEXT NOT NULL DEFAULT 'daily',
-            weekdays TEXT NOT NULL DEFAULT '[]',
-            time_of_day TEXT,
-            day_of_month INTEGER,
-            deadline_time TEXT,
-            priority TEXT NOT NULL DEFAULT 'medium',
-            enabled INTEGER NOT NULL DEFAULT 1,
-            created_at TEXT NOT NULL,
-            archived_at TEXT
-        );
-        CREATE TABLE IF NOT EXISTS routine_completions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            routine_id INTEGER NOT NULL,
-            occurrence_date TEXT NOT NULL,
-            status TEXT NOT NULL DEFAULT 'done',
-            at TEXT NOT NULL,
-            task_id INTEGER,
-            UNIQUE(routine_id, occurrence_date)
-        );
-        CREATE TABLE IF NOT EXISTS goals (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            title TEXT NOT NULL,
-            description TEXT NOT NULL DEFAULT '',
-            condition TEXT NOT NULL DEFAULT '',
-            target_count INTEGER,
-            target_streak INTEGER,
-            linked_routine_ids TEXT NOT NULL DEFAULT '[]',
-            status TEXT NOT NULL DEFAULT 'active',
-            created_at TEXT NOT NULL,
-            achieved_at TEXT
-        );
-        CREATE TABLE IF NOT EXISTS goal_progress (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            goal_id INTEGER NOT NULL,
-            date TEXT NOT NULL,
-            met INTEGER NOT NULL DEFAULT 0,
-            note TEXT NOT NULL DEFAULT '',
-            UNIQUE(goal_id, date)
-        );
-        CREATE TABLE IF NOT EXISTS accountability_rules (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            title TEXT NOT NULL,
-            rule_type TEXT NOT NULL DEFAULT 'custom',
-            condition TEXT NOT NULL DEFAULT '',
-            message TEXT NOT NULL DEFAULT '',
-            enabled INTEGER NOT NULL DEFAULT 1,
-            cooldown_minutes INTEGER NOT NULL DEFAULT 0,
-            last_fired_at TEXT,
-            created_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS activity_log (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            at TEXT NOT NULL,
-            actor TEXT NOT NULL DEFAULT 'system',
-            action TEXT NOT NULL,
-            detail TEXT NOT NULL DEFAULT '',
-            ref_type TEXT,
-            ref_id TEXT
-        );
-        CREATE TABLE IF NOT EXISTS token_usage (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            at TEXT NOT NULL,
-            lane TEXT NOT NULL DEFAULT 'chat',
-            purpose TEXT NOT NULL DEFAULT '',
-            provider TEXT NOT NULL DEFAULT '',
-            model TEXT NOT NULL DEFAULT '',
-            prompt_tokens INTEGER NOT NULL DEFAULT 0,
-            completion_tokens INTEGER NOT NULL DEFAULT 0,
-            total_tokens INTEGER NOT NULL DEFAULT 0,
-            estimated INTEGER NOT NULL DEFAULT 0
-        );
-        """
-    )
-    store._conn.commit()
+    _ensure_schema(store._conn)
     acct = get_stores(store)
 
     # Build a minimal Core mock
@@ -120,12 +41,17 @@ def core(tmp_path):
         pass
 
     brain._routine_engine = RoutineEngine(
-        acct["routines"], acct["routine_completions"],
-        store, _noop, acct["activity"],
+        acct["routines"],
+        acct["routine_completions"],
+        store,
+        _noop,
+        acct["activity"],
     )
     brain._goal_engine = GoalEngine(
-        acct["goals"], acct["goal_progress"],
-        acct["routines"], acct["routine_completions"],
+        acct["goals"],
+        acct["goal_progress"],
+        acct["routines"],
+        acct["routine_completions"],
         acct["activity"],
     )
 
@@ -526,6 +452,7 @@ def test_dashboard_hide_on_close(core):
     app.processEvents()
 
     from PySide6.QtGui import QCloseEvent
+
     event = QCloseEvent()
     dash.closeEvent(event)
     app.processEvents()

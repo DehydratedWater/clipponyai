@@ -1,7 +1,13 @@
 import pytest
 from pydantic import ValidationError
 
-from clipponyai.config import Config, MCPConfig, MCPServerConfig, config_path
+from clipponyai.config import (
+    Config,
+    MCPConfig,
+    MCPServerConfig,
+    ObservationConfig,
+    config_path,
+)
 from clipponyai.providers import FAST, SLOW, VISION, make_preset, model_for
 
 
@@ -13,6 +19,42 @@ def test_defaults_are_private_and_sane(config):
     assert "openai" in config.llm.providers
     assert "ollama" in config.llm.providers  # local-GPU path out of the box
     assert config.mcp.enabled is False
+    assert config.observation.enabled is False
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("sample_seconds", 4),
+        ("sample_seconds", 301),
+        ("idle_threshold_seconds", 29),
+        ("idle_threshold_seconds", 3601),
+        ("retention_days", 0),
+        ("retention_days", 366),
+        ("max_rows", 499),
+        ("max_rows", 100001),
+    ],
+)
+def test_observation_config_rejects_out_of_bounds(field, value):
+    with pytest.raises(ValidationError, match=field):
+        ObservationConfig(**{field: value})
+
+
+def test_observation_config_accepts_bounds_and_valid_regexes():
+    configured = ObservationConfig(
+        sample_seconds=5,
+        idle_threshold_seconds=3600,
+        retention_days=365,
+        max_rows=500,
+        redact_patterns=[r"secret-\d+"],
+    )
+
+    assert configured.redact_patterns == [r"secret-\d+"]
+
+
+def test_observation_config_rejects_invalid_regex():
+    with pytest.raises(ValidationError, match="invalid redact pattern"):
+        ObservationConfig(redact_patterns=["["])
 
 
 def test_save_load_roundtrip(config):
@@ -62,7 +104,8 @@ def test_extra_body_serialized_as_json_string(config):
     from clipponyai.config import ProviderConfig
 
     cfg = ProviderConfig(
-        base_url="http://x/v1", fast_model="m",
+        base_url="http://x/v1",
+        fast_model="m",
         extra_body={"chat_template_kwargs": {"enable_thinking": False}},
     )
     preset = make_preset("vllm", cfg, FAST)
