@@ -31,9 +31,41 @@ from pathlib import Path
 ISO = "%Y-%m-%d %H:%M:%S"
 
 _STOPWORDS = {
-    "a", "an", "the", "to", "of", "for", "and", "or", "in", "on", "at", "with",
-    "my", "me", "i", "it", "this", "that", "some", "about", "up", "out", "do",
-    "go", "get", "być", "się", "na", "do", "w", "z", "i", "o", "że", "to",
+    "a",
+    "an",
+    "the",
+    "to",
+    "of",
+    "for",
+    "and",
+    "or",
+    "in",
+    "on",
+    "at",
+    "with",
+    "my",
+    "me",
+    "i",
+    "it",
+    "this",
+    "that",
+    "some",
+    "about",
+    "up",
+    "out",
+    "do",
+    "go",
+    "get",
+    "być",
+    "się",
+    "na",
+    "do",
+    "w",
+    "z",
+    "i",
+    "o",
+    "że",
+    "to",
 }
 
 # escalating nudge templates, indexed by ping number (last repeats)
@@ -97,8 +129,11 @@ class Task:
             delta = self.deadline - now
             if delta.total_seconds() < 0:
                 ago = -delta
-                over = f"{int(ago.total_seconds() // 3600)}h" if ago >= timedelta(hours=1) \
+                over = (
+                    f"{int(ago.total_seconds() // 3600)}h"
+                    if ago >= timedelta(hours=1)
                     else f"{int(ago.total_seconds() // 60)}m"
+                )
                 bits.append(f"due {self.deadline.strftime('%a %H:%M')} ({over} overdue)")
             else:
                 bits.append(f"due {self.deadline.strftime('%a %d %b %H:%M')}")
@@ -192,11 +227,18 @@ class TaskStore:
     # ── internals ────────────────────────────────────────────────────
     def _row_to_task(self, row: sqlite3.Row) -> Task:
         return Task(
-            id=row["id"], title=row["title"], notes=row["notes"],
-            status=row["status"], priority=row["priority"], source=row["source"],
-            deadline=_parse_dt(row["deadline"]), remind_at=_parse_dt(row["remind_at"]),
-            created_at=_parse_dt(row["created_at"]), completed_at=_parse_dt(row["completed_at"]),
-            nudge_count=row["nudge_count"], last_nudge_at=_parse_dt(row["last_nudge_at"]),
+            id=row["id"],
+            title=row["title"],
+            notes=row["notes"],
+            status=row["status"],
+            priority=row["priority"],
+            source=row["source"],
+            deadline=_parse_dt(row["deadline"]),
+            remind_at=_parse_dt(row["remind_at"]),
+            created_at=_parse_dt(row["created_at"]),
+            completed_at=_parse_dt(row["completed_at"]),
+            nudge_count=row["nudge_count"],
+            last_nudge_at=_parse_dt(row["last_nudge_at"]),
         )
 
     def _log(self, task_id: int, old: str | None, new: str, actor: str, note: str = "") -> None:
@@ -364,8 +406,9 @@ class TaskStore:
             return self._get_locked(task.id)
 
     # ── nudging ──────────────────────────────────────────────────────
-    def due_for_nudge(self, now: datetime, gaps_minutes: list[int], max_nudges: int
-                      ) -> tuple[list[Task], list[Task]]:
+    def due_for_nudge(
+        self, now: datetime, gaps_minutes: list[int], max_nudges: int
+    ) -> tuple[list[Task], list[Task]]:
         """(due, to_drop) — tasks whose nudge is due, and ones past max nudges."""
         due, to_drop = [], []
         for task in self.pending():
@@ -406,8 +449,11 @@ class TaskStore:
         dropped = self.by_status("dropped", limit=5)
 
         sections = [
-            ("🔴 Overdue", overdue), ("📌 Today", today), ("📅 Upcoming (7d)", upcoming),
-            ("📆 Later", later), ("🗂 No deadline", undated),
+            ("🔴 Overdue", overdue),
+            ("📌 Today", today),
+            ("📅 Upcoming (7d)", upcoming),
+            ("📆 Later", later),
+            ("🗂 No deadline", undated),
         ]
         out = []
         for header, tasks in sections:
@@ -415,7 +461,7 @@ class TaskStore:
                 out.append(header)
                 out.extend(f"  • {t.describe(now)}" for t in tasks)
         if dropped:
-            out.append("🪦 Recently dropped (say \"restore …\" to revive)")
+            out.append('🪦 Recently dropped (say "restore …" to revive)')
             out.extend(f"  • [#{t.id}] {t.title}" for t in dropped)
         return "\n".join(out) if out else "✨ nothing tracked right now — enjoy the calm!"
 
@@ -428,7 +474,13 @@ class TaskStore:
             )
             self._conn.commit()
 
-    def recent_messages(self, limit: int = 40, *, with_source: bool = False) -> list[dict]:
+    def recent_messages(
+        self,
+        limit: int = 40,
+        *,
+        with_source: bool = False,
+        with_at: bool = False,
+    ) -> list[dict]:
         """The newest `limit` messages, oldest first.
 
         `with_source` adds the surface each message came in through
@@ -437,15 +489,18 @@ class TaskStore:
         """
         with self._lock:
             rows = self._conn.execute(
-                "SELECT role, content, source FROM messages ORDER BY id DESC LIMIT ?",
+                "SELECT role, content, source, at FROM messages ORDER BY id DESC LIMIT ?",
                 (limit,),
             ).fetchall()
-        if with_source:
-            return [
-                {"role": r["role"], "content": r["content"], "source": r["source"]}
-                for r in reversed(rows)
-            ]
-        return [{"role": r["role"], "content": r["content"]} for r in reversed(rows)]
+        result = []
+        for row in reversed(rows):
+            message = {"role": row["role"], "content": row["content"]}
+            if with_source:
+                message["source"] = row["source"]
+            if with_at:
+                message["at"] = datetime.strptime(row["at"], ISO)
+            result.append(message)
+        return result
 
     # ── key/value meta store ─────────────────────────────────────────
     def get_meta(self, key: str, default: str | None = None) -> str | None:

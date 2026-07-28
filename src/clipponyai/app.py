@@ -23,6 +23,7 @@ from .logwatch import read_recent_logs
 from .mcp import MCPManager
 from .onboarding import OnboardingManager
 from .observer import ObservationRecorder
+from .reflection import ReflectionEngine
 from .rules import RuleEngine
 from .scheduler import ReminderScheduler
 from .skills import SkillsLibrary
@@ -139,6 +140,17 @@ class Core:
             voice_fn=lambda note: self.brain.voice(note, kind="awareness"),
         )
         self.observation_recorder = ObservationRecorder(config, observation_store)
+        self.reflection_engine = ReflectionEngine(
+            config,
+            self.store,
+            observation_store,
+            self.accountability["activity"],
+            reflect_fn=self.brain.reflect,
+            deliver=self._deliver_nudge,
+            questioner=self.proactive_questioner,
+            routine_engine=routine_engine,
+            goal_engine=goal_engine,
+        )
         self.channels: list[Channel] = []
         self.observers: list[Observer] = []  # GUI mirrors exchanges live
         self.nudge_hooks: list[Deliver] = []  # GUI shows nudges (bubble + chase)
@@ -283,11 +295,13 @@ class Core:
         self._tasks.append(asyncio.create_task(self.scheduler.run()))
         await self.awareness_monitor.start()
         await self.observation_recorder.start()
+        await self.reflection_engine.start()
 
     async def stop(self) -> None:
         self.scheduler.stop()
         await self.awareness_monitor.stop()
         await self.observation_recorder.stop()
+        await self.reflection_engine.stop()
         for task in self._tasks:
             task.cancel()
         self.mcp_manager.stop()
@@ -361,6 +375,10 @@ def _open_settings(pony, core: Core, config: Config, chat=None) -> None:
             pass
         try:
             asyncio.get_running_loop().create_task(core.observation_recorder.refresh())
+        except RuntimeError:
+            pass
+        try:
+            asyncio.get_running_loop().create_task(core.reflection_engine.refresh())
         except RuntimeError:
             pass
 

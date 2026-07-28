@@ -6,6 +6,7 @@ from clipponyai.config import (
     MCPConfig,
     MCPServerConfig,
     ObservationConfig,
+    ReflectionConfig,
     config_path,
 )
 from clipponyai.providers import FAST, SLOW, VISION, make_preset, model_for
@@ -20,6 +21,43 @@ def test_defaults_are_private_and_sane(config):
     assert "ollama" in config.llm.providers  # local-GPU path out of the box
     assert config.mcp.enabled is False
     assert config.observation.enabled is False
+    assert config.reflection.enabled is True
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("interval_minutes", 4),
+        ("interval_minutes", 241),
+        ("min_gap_minutes", 14),
+        ("min_gap_minutes", 481),
+        ("quiet_after_nudge_minutes", -1),
+        ("quiet_after_nudge_minutes", 121),
+        ("context_hours", 0),
+        ("context_hours", 25),
+        ("max_tool_rounds", 0),
+        ("max_tool_rounds", 11),
+    ],
+)
+def test_reflection_config_rejects_out_of_bounds(field, value):
+    with pytest.raises(ValidationError, match=field):
+        ReflectionConfig(**{field: value})
+
+
+def test_reflection_config_accepts_bounds():
+    configured = ReflectionConfig(
+        interval_minutes=5,
+        min_gap_minutes=480,
+        quiet_after_nudge_minutes=0,
+        context_hours=24,
+        max_tool_rounds=10,
+    )
+
+    assert configured.interval_minutes == 5
+    assert configured.min_gap_minutes == 480
+    assert configured.quiet_after_nudge_minutes == 0
+    assert configured.context_hours == 24
+    assert configured.max_tool_rounds == 10
 
 
 @pytest.mark.parametrize(

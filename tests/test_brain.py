@@ -8,6 +8,8 @@ structured output) or ("tool", name, args) tuples (a tool call).
 
 from datetime import datetime, timedelta
 
+import pytest
+
 from clipponyai.providers import FAST, SLOW, VISION
 
 EMPTY_SENSE = {"done_task_ids": [], "maybe_done_task_ids": [], "commitments": []}
@@ -23,6 +25,51 @@ async def test_respond_plain_turn(make_brain, store):
         {"role": "user", "content": "hello"},
         {"role": "assistant", "content": "hi friend! ✨"},
     ]
+
+
+async def test_reflect_uses_fast_tools_without_conversation_history(make_brain, store):
+    from clipponyai.brain import TOOL_SPECS
+    from clipponyai.characters import REFLECTION_BASE
+
+    brain = make_brain(
+        {
+            "pony-reflect": [
+                ("tool", "list_tasks", {}),
+                "Your report is due soon.",
+            ]
+        }
+    )
+    captured = {}
+    original_run = brain._run
+
+    def recording_run(spec, user_input, **kwargs):
+        captured.update(kwargs)
+        return original_run(spec, user_input, **kwargs)
+
+    brain._run = recording_run
+    reply = await brain.reflect("It is Tuesday 12:00.\n\nPending tasks:\nReport")
+
+    assert reply == "Your report is due soon."
+    client = [c for c in brain._test_clients if c.spec.agent_id == "pony-reflect"][0]
+    assert len(client.spec.tools) == len(TOOL_SPECS)
+    assert REFLECTION_BASE in client.spec.system_prompt
+    first_messages = client.calls[0]["messages"]
+    non_system = [message for message in first_messages if message["role"] != "system"]
+    assert len(non_system) == 1
+    assert non_system[0]["role"] == "user"
+    assert any(
+        message.get("role") == "tool" and "nothing tracked" in message.get("content", "")
+        for message in client.calls[-1]["messages"]
+    )
+    assert captured["history"] == ()
+    assert captured["max_tool_rounds"] == brain.config.reflection.max_tool_rounds
+    assert store.recent_messages() == []
+
+
+@pytest.mark.parametrize("value", ["SILENT", "silent.", " SILENT ", ""])
+async def test_reflect_parses_silent_outputs(make_brain, value):
+    brain = make_brain({"pony-reflect": value})
+    assert await brain.reflect("context") is None
 
 
 async def test_history_flows_into_next_turn(make_brain, store):

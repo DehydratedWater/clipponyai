@@ -405,6 +405,52 @@ class ProactiveQuestionsConfig(BaseModel):
         return v
 
 
+class ReflectionConfig(BaseModel):
+    """Periodic tool-using reflection, quiet by default unless there is value."""
+
+    enabled: bool = True
+    interval_minutes: int = 20
+    min_gap_minutes: int = 60
+    quiet_after_nudge_minutes: int = 10
+    context_hours: int = 3
+    max_tool_rounds: int = 4
+
+    @field_validator("interval_minutes")
+    @classmethod
+    def _interval_range(cls, v: int) -> int:
+        if not (5 <= v <= 240):
+            raise ValueError("interval_minutes must be between 5 and 240")
+        return v
+
+    @field_validator("min_gap_minutes")
+    @classmethod
+    def _min_gap_range(cls, v: int) -> int:
+        if not (15 <= v <= 480):
+            raise ValueError("min_gap_minutes must be between 15 and 480")
+        return v
+
+    @field_validator("quiet_after_nudge_minutes")
+    @classmethod
+    def _quiet_after_nudge_range(cls, v: int) -> int:
+        if not (0 <= v <= 120):
+            raise ValueError("quiet_after_nudge_minutes must be between 0 and 120")
+        return v
+
+    @field_validator("context_hours")
+    @classmethod
+    def _context_hours_range(cls, v: int) -> int:
+        if not (1 <= v <= 24):
+            raise ValueError("context_hours must be between 1 and 24")
+        return v
+
+    @field_validator("max_tool_rounds")
+    @classmethod
+    def _tool_rounds_range(cls, v: int) -> int:
+        if not (1 <= v <= 10):
+            raise ValueError("max_tool_rounds must be between 1 and 10")
+        return v
+
+
 class Config(BaseModel):
     ui: UIConfig = Field(default_factory=UIConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
@@ -417,6 +463,7 @@ class Config(BaseModel):
     observation: ObservationConfig = Field(default_factory=ObservationConfig)
     onboarding: OnboardingConfig = Field(default_factory=OnboardingConfig)
     proactive_questions: ProactiveQuestionsConfig = Field(default_factory=ProactiveQuestionsConfig)
+    reflection: ReflectionConfig = Field(default_factory=ReflectionConfig)
     # privacy: the pony can only look at your screen when you turn this on
     screenshot_enabled: bool = False
     # scan your messages for passing promises ("I'll call mom later") and

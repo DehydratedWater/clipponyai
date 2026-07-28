@@ -258,6 +258,8 @@ def lane_from_agent_id(agent_id: str) -> str:
         return "vision"
     if agent_id == "pony-voice":
         return "sensor"
+    if agent_id == "pony-reflect":
+        return "chat"
     if "sensor" in agent_id or "analyst" in agent_id:
         return "sensor"
     return "other"
@@ -270,6 +272,7 @@ def purpose_from_agent_id(agent_id: str) -> str:
         "pony-slow": "deep_think",
         "pony-vision": "look_at_screen",
         "pony-voice": "voice",
+        "pony-reflect": "reflection",
         "message-sensor": "message-sensor",
         "when-sensor": "when-sensor",
         "log-analyst": "log-analyst",

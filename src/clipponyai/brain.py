@@ -26,6 +26,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+import re
 from collections.abc import Callable
 from datetime import date, datetime, timedelta
 from typing import Any
@@ -40,7 +41,12 @@ from open_agent_compiler.interactive import build_interactive_spec, run_interact
 from open_agent_compiler.interactive.spec import ToolSpec
 
 from .accountability import ActivityStore, get_stores
-from .characters import build_proactive_prompt, build_system_prompt, get_character
+from .characters import (
+    build_proactive_prompt,
+    build_reflection_prompt,
+    build_system_prompt,
+    get_character,
+)
 from .config import Config
 from .digest import render_activity_digest
 from .goals import GoalEngine
@@ -994,6 +1000,31 @@ class PonyBrain:
     async def respond(self, text: str, source: str = "desktop") -> str:
         async with self._turn_lock:
             return await asyncio.to_thread(self._respond_sync, text, source)
+
+    async def reflect(self, context: str) -> str | None:
+        async with self._turn_lock:
+            return await asyncio.to_thread(self._reflect_sync, context)
+
+    def _reflect_sync(self, context: str) -> str | None:
+        spec = self._spec(FAST).model_copy(
+            update={
+                "system_prompt": build_reflection_prompt(get_character(self.character_slug)),
+                "agent_id": "pony-reflect",
+            }
+        )
+        result = self._run(
+            spec,
+            context,
+            tool_runner=self._tool_runner,
+            history=(),
+            max_tool_rounds=self.config.reflection.max_tool_rounds,
+        )
+        spoken = result.output_text.strip()
+        if not spoken or re.fullmatch(r"silent[.!?,;:…\s-]*", spoken, re.IGNORECASE):
+            return None
+        if len(spoken) > 400:
+            log.warning("reflection output is %d characters", len(spoken))
+        return spoken
 
     def _respond_sync(self, text: str, source: str) -> str:
         self.store.save_message("user", text, source)
